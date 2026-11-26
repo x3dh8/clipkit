@@ -914,10 +914,17 @@ export class Watcher {
   async describeFrame(url) {
     if (!this.env || !this.env.AI || !/^https:\/\//.test(url || '')) return '';
     try {
+      const img = await fetch(url);
+      if (!img.ok) { this.frameErr = 'thumbnail ' + img.status; return ''; }
+      const bytes = new Uint8Array(await img.arrayBuffer()); let bin = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      const dataUri = `data:${img.headers.get('content-type') || 'image/jpeg'};base64,${btoa(bin)}`;
       const r = await Promise.race([
-        this.env.AI.run('@cf/moondream/moondream3.1-9B-A2B', { task: 'query', image: url, question: 'This is a frame from a livestream. In one short sentence, say what is happening: the setting, what the person is doing or wearing, and what game or scene is on screen. Do not guess anyone\'s name. Do not mention the stream overlay, chat box or webcam border.' }),
+        this.env.AI.run('@cf/meta/llama-4-scout-17b-16e-instruct', { max_tokens: 80, temperature: 0.2, messages: [{ role: 'user', content: [
+          { type: 'text', text: 'This is a frame from a livestream. In one short sentence, say what is happening: the setting, what the person is doing or wearing, and what game or scene is on screen. Do not guess anyone\'s name. Do not mention the stream overlay, chat box or webcam border.' },
+          { type: 'image_url', image_url: { url: dataUri } }] }] }),
         new Promise((_, no) => setTimeout(() => no(new Error('slow')), 20000))]);
-      const t = typeof r === 'string' ? r : r && (r.answer || r.caption || r.response || r.result || r.text || r.description);
+      const t = typeof r === 'string' ? r : r && (r.response || r.answer || r.result || r.text);
       if (!t) this.frameErr = 'no text: ' + JSON.stringify(r).slice(0, 300);
       return String(t || '').replace(/\s+/g, ' ').trim().slice(0, 220);
     } catch (e) { this.frameErr = String(e && e.message || e).slice(0, 300); return ''; }
