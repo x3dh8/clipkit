@@ -65,7 +65,7 @@ export class Watcher {
     this.ctx = ctx; this.env = env; this.st = ctx.storage;
     this.ws = null; this.session = null; this.subs = new Map(); this.stats = new Map();
     this.tickTimer = null; this.lastWsAt = 0; this.keepaliveSec = 10;
-    this.refreshing = null; this.connecting = null; this.welcomeWait = null; this.device = null;
+    this.refreshing = null; this.connecting = null; this.welcomeWait = null; this.device = null; this.trendCache = new Map(); this.gameCache = new Map();
     this.ready = this.load();
   }
 
@@ -133,6 +133,7 @@ export class Watcher {
         return json(await this.createClip(s, 'You tapped Clip now', [], true));
       }
       if (path === '/api/clips/download' && method === 'POST') return json(await this.download(body.id));
+      if (path === '/api/trending') return json(await this.trending(url.searchParams));
       if (path === '/api/clips/remove' && method === 'POST') {
         this.clips = this.clips.filter((c) => c.id !== body.id); await this.st.put('clips', this.clips); return json({ ok: true });
       }
@@ -403,6 +404,47 @@ export class Watcher {
     }
     if (changed) await this.st.put('clips', this.clips);
   }
+
+  /* ---------------- Trending: popular clips other people already made ---------------- */
+  async trending(q) {
+    const range = ({ '24h': 24, '3d': 72, '7d': 168 })[q.get('range')] || 24;
+    const scope = q.get('scope') === 'game' ? 'game' : 'streamers';
+    const gameName = String(q.get('game') || '').trim();
+    const cacheKey = `${scope}|${range}|${gameName.toLowerCase()}|${this.cfg.streamers.map((s) => s.id).join(',')}`;
+    const hit = this.trendCache.get(cacheKey);
+    if (hit && this.now() - hit.at < 5 * 60 * 1000) return { ...hit.data, cached: true };
+    const started = new Date(this.now() - range * 3600 * 1000).toISOString(), ended = new Date(this.now()).toISOString();
+    let raw = [], game = null;
+    if (scope === 'game') {
+      if (!gameName) throw new Error('Type a game name, like Valorant.');
+      game = this.gameCache.get(gameName.toLowerCase());
+      if (!game) {
+        const g = await this.helix('/games', { query: { name: gameName } });
+        let d = g.data && g.data[0];
+        if (!d) { const s = await this.helix('/search/categories', { query: { query: gameName, first: '1' } }); d = s.data && s.data[0]; }
+        if (!d) throw new Error(`Couldn't find a game called ${gameName}.`);
+        game = { id: d.id, name: d.name }; this.gameCache.set(gameName.toLowerCase(), game);
+      }
+      const j = await this.helix('/clips', { query: { game_id: game.id, started_at: started, ended_at: ended, first: '100' } });
+      raw = j.data || [];
+    } else {
+      if (!this.cfg.streamers.length) return { clips: [], note: 'Add streamers on the Auto clips tab first.' };
+      const lists = await Promise.all(this.cfg.streamers.map((s) =>
+        this.helix('/clips', { query: { broadcaster_id: s.id, started_at: started, ended_at: ended, first: '25' } }).then((j) => j.data || []).catch(() => [])));
+      raw = lists.flat();
+    }
+    const mine = new Set(this.clips.map((c) => c.id));
+    const clips = raw.map((c) => {
+      const hours = Math.max(0.25, (this.now() - Date.parse(c.created_at)) / 3600000);
+      return { id: c.id, url: c.url, title: c.title, name: c.broadcaster_name, by: c.creator_name, views: c.view_count, created: c.created_at,
+        perHour: Math.round(c.view_count / hours), duration: c.duration, thumb: c.thumbnail_url, video: c.video_id || '', vodOffset: c.vod_offset == null ? null : c.vod_offset, mine: mine.has(c.id) };
+    });
+    const data = { clips, game: game && game.name, at: this.now() };
+    this.trendCache.set(cacheKey, { at: this.now(), data });
+    if (this.trendCache.size > 30) this.trendCache.delete(this.trendCache.keys().next().value);
+    return data;
+  }
+
   async download(id) {
     const c = this.clips.find((x) => x.id === id);
     if (!c) throw new Error('Clip not found.');

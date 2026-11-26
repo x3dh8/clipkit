@@ -84,6 +84,17 @@ input[type=text],select{background:var(--panel2);border:1px solid var(--line);bo
 .log li:first-child{border-top:0}
 .log time{color:var(--mute);font-variant-numeric:tabular-nums;font-size:12.5px}
 .empty{color:var(--mute);text-align:center;padding:14px 6px;font-size:14px}
+.tabs{display:grid;grid-template-columns:1fr 1fr;background:var(--panel2);border-radius:12px;padding:3px;gap:3px;margin-top:14px}
+.tabs button{border:0;background:none;border-radius:10px;padding:10px;min-height:44px;color:var(--mute);font-weight:600;cursor:pointer}
+.tabs button.on{background:#3a3e47;color:var(--ink)}
+.tr{display:grid;grid-template-columns:132px minmax(0,1fr);gap:12px;padding:12px 0;border-top:1px solid var(--line)}
+.tr:first-child{border-top:0}
+.tr .thumb{border-radius:8px;overflow:hidden}
+.tr b{display:block;font-size:14px;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.tr small{display:block;color:var(--mute);font-size:12.5px;margin-top:3px}
+.tr .hot{color:var(--hi);font-weight:600}
+.tr .acts{margin-top:8px;flex-wrap:wrap}
+@media(max-width:420px){.tr{grid-template-columns:104px minmax(0,1fr)}}
 #toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#2b2f37;border:1px solid var(--line);padding:10px 16px;border-radius:12px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s;width:max-content;max-width:90vw;z-index:9}
 #toast.show{opacity:1}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -133,6 +144,24 @@ input[type=text],select{background:var(--panel2);border:1px solid var(--line);bo
   </section>
 
   <div id="vMain" hidden>
+    <div class="tabs" id="tabs"><button data-t="auto" class="on">Auto clips</button><button data-t="trend">Trending</button></div>
+    <div id="tTrend" hidden>
+      <section class="card">
+        <div class="seg" id="tScope" style="grid-template-columns:1fr 1fr"><button data-v="streamers" class="on">My streamers</button><button data-v="game">A game</button></div>
+        <div class="row" id="tGameRow" style="margin-top:10px" hidden><input type="text" id="tGame" placeholder="Game name, like Valorant" autocomplete="off"><button class="btn primary" id="tGo">Show</button></div>
+        <div class="grid2">
+          <label>From the last<select id="tRange"><option value="24h">24 hours</option><option value="3d">3 days</option><option value="7d">7 days</option></select></label>
+          <label>Sort by<select id="tSort"><option value="hot">Hot right now</option><option value="views">Most views</option></select></label>
+        </div>
+        <p class="mute small" style="margin-top:10px">“Hot right now” ranks clips by views per hour, so new clips that are taking off rise to the top. You can watch these, but Twitch only lets you download clips you made yourself, so use them for ideas or to find timestamps in footage a clipping program gives you.</p>
+      </section>
+      <section class="card">
+        <h2>Popular clips <span class="n" id="tCount"></span><button class="btn mini" id="tRefresh" style="margin-left:auto">Refresh</button></h2>
+        <div id="tList"><div class="empty">Loading…</div></div>
+        <button class="btn wide" id="tUnhide" hidden>Show the clips I hid</button>
+      </section>
+    </div>
+    <div id="tAuto">
     <section class="card">
       <div class="switch">
         <div><b>Auto-clipping</b><div class="mute small" id="statusLine"></div></div>
@@ -176,6 +205,7 @@ input[type=text],select{background:var(--panel2);border:1px solid var(--line);bo
       <button class="btn wide" id="copyLink">Copy my private link</button>
       <button class="btn wide" id="logout" style="margin-top:8px">Disconnect Twitch</button>
     </section>
+    </div>
   </div>
 </div>
 <div id="toast" role="status"></div>
@@ -300,6 +330,57 @@ $('#copyLink').onclick = async () => {
   catch (e) { prompt('Copy this link:', link); }
 };
 $('#logout').onclick = async () => { try { await api('/api/logout', {}); refresh(); } catch (e) { toast(e.message); } };
+
+/* ---------- Trending tab ---------- */
+let tab = 'auto', tData = null, tScope = 'streamers', hidden = new Set();
+try { hidden = new Set(JSON.parse(localStorage.getItem('acHidden') || '[]')); } catch (e) {}
+const saveHidden = () => { try { localStorage.setItem('acHidden', JSON.stringify([...hidden].slice(-500))); } catch (e) {} };
+const num = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + 'K' : String(n);
+const vodTime = (s) => { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return { label: (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'), q: `${h}h${m}m${x}s` }; };
+$('#tabs').onclick = (e) => {
+  const b = e.target.closest('button'); if (!b) return; tab = b.dataset.t;
+  for (const x of $('#tabs').children) x.classList.toggle('on', x === b);
+  $('#tTrend').hidden = tab !== 'trend'; $('#tAuto').hidden = tab !== 'auto';
+  if (tab === 'trend' && !tData) loadTrend();
+};
+$('#tScope').onclick = (e) => {
+  const b = e.target.closest('button'); if (!b) return; tScope = b.dataset.v;
+  for (const x of $('#tScope').children) x.classList.toggle('on', x === b);
+  $('#tGameRow').hidden = tScope !== 'game';
+  if (tScope === 'streamers') loadTrend(); else { tData = null; $('#tList').innerHTML = '<div class="empty">Type a game and tap Show.</div>'; $('#tCount').textContent = ''; $('#tGame').focus(); }
+};
+$('#tGo').onclick = () => loadTrend();
+$('#tGame').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadTrend(); });
+$('#tRange').onchange = () => loadTrend();
+$('#tSort').onchange = () => renderTrend();
+$('#tRefresh').onclick = () => loadTrend();
+$('#tUnhide').onclick = () => { hidden.clear(); saveHidden(); renderTrend(); };
+async function loadTrend() {
+  if (tScope === 'game' && !$('#tGame').value.trim()) return;
+  $('#tList').innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const qs = new URLSearchParams({ scope: tScope, range: $('#tRange').value, game: $('#tGame').value.trim() });
+    tData = await fetch('/api/trending?' + qs, { headers: { 'x-clipkit-key': key } }).then(async (r) => { const j = await r.json(); if (!r.ok) throw new Error(j.error || 'Could not load clips.'); return j; });
+    renderTrend();
+  } catch (e) { $('#tList').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+function renderTrend() {
+  if (!tData) return;
+  const sort = $('#tSort').value;
+  const all = tData.clips.slice().sort((a, b) => sort === 'views' ? b.views - a.views : b.perHour - a.perHour);
+  const list = all.filter((c) => !hidden.has(c.id)).slice(0, 60);
+  const hid = all.length - all.filter((c) => !hidden.has(c.id)).length;
+  $('#tUnhide').hidden = !hid; $('#tUnhide').textContent = `Show the ${hid} clip${hid === 1 ? '' : 's'} I hid`;
+  $('#tCount').textContent = list.length ? (tData.game ? `· ${tData.game}` : '') : '';
+  if (!list.length) { $('#tList').innerHTML = `<div class="empty">${esc(tData.note || 'No clips found for this time range.')}</div>`; return; }
+  $('#tList').innerHTML = list.map((c) => {
+    const age = ago(Date.parse(c.created));
+    const vod = c.video && c.vodOffset != null ? vodTime(c.vodOffset) : null;
+    return `<div class="tr"><div class="thumb" style="background-image:url('${esc(c.thumb)}')"><span>${Math.round(c.duration)}s</span></div><div><b>${esc(c.title)}</b><small>${esc(c.name)} · clipped by ${esc(c.by)}${c.mine ? ' (your auto clipper)' : ''}</small><small><span class="hot">${num(c.perHour)}/hour</span> · ${num(c.views)} views · ${age}</small><div class="acts"><a class="btn mini" href="${esc(c.url)}" target="_blank" rel="noopener">Watch</a>${vod ? `<a class="btn mini" href="https://www.twitch.tv/videos/${esc(c.video)}?t=${vod.q}" target="_blank" rel="noopener">VOD at ${vod.label}</a>` : ''}<button class="btn mini" data-hide="${esc(c.id)}" aria-label="Hide this clip">Hide</button></div></div></div>`;
+  }).join('');
+}
+$('#tList').onclick = (e) => { const b = e.target.closest('[data-hide]'); if (!b) return; hidden.add(b.dataset.hide); saveHidden(); renderTrend(); };
+
 function loop() { clearTimeout(pollT); if (!document.hidden) refresh(); pollT = setTimeout(loop, 5000); }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) loop(); });
 loop();
