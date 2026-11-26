@@ -282,7 +282,7 @@ export class Watcher {
       }
       if (path === '/api/queue/now' && method === 'POST') {
         if (!this.cfg.postsHook) return json({ error: 'Add the Discord webhook for your posts channel first.' }, 400);
-        return json(await this.makeQueue());
+        return json(await this.makeQueue(body.preview === true));
       }
       if (path === '/api/queue') return json({ queue: this.queue });
       if (path === '/api/posts/test' && method === 'POST') {
@@ -951,7 +951,7 @@ export class Watcher {
     if (ch.is_branded_content) w.push('a sponsor, so cut any sponsor logos, links or codes');
     return w;
   }
-  async makeQueue() {
+  async makeQueue(preview) {
     const n = this.cfg.queueCount || 8, since = this.now() - 26 * 3600 * 1000, items = [], skipped = [];
     const editor = new Set(this.cfg.streamers.filter((s) => s.editor === true).map((s) => s.id));
     const started = new Date(this.now() - 72 * 3600 * 1000).toISOString();
@@ -1014,6 +1014,7 @@ export class Watcher {
     // last check on what the AI wrote; anything flagged goes back to a plain title
     const vs = await Promise.all(chosen.map((it) => this.guard(`${it.titles.join('\n')}\n${it.description}\n${it.hashtags.join(' ')}\n${it.angle}`)));
     chosen.forEach((it, i) => { if (vs[i] === false) { it.titles = [`${it.name} stream moment`]; it.description = `Clip from ${it.name}'s stream${it.login ? `: twitch.tv/${it.login}` : ''}. All credit to ${it.name}.`; it.hashtags = ['#shorts', ...(it.login ? ['#' + it.login] : [])]; it.angle = ''; } });
+    if (preview) return { ok: true, preview: chosen.map((it) => ({ name: it.name, game: it.game, streamTitle: it.streamTitle, scene: it.scene, titles: it.titles, hashtags: it.hashtags, angle: it.angle })) };
     this.queue = { at: this.now(), items: chosen }; await this.st.put('queue', this.queue);
     const how = (it) => it.ready ? '📥 **Ready:** pull it into ClipKit Batch with *Get clips from my auto clipper*.'
       : it.kind === 'mine' ? '📥 Download it from your Clips Manager (Clips I\'ve created), then add it in ClipKit Batch.'
