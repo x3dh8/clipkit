@@ -95,6 +95,16 @@ input[type=text],select{background:var(--panel2);border:1px solid var(--line);bo
 .tr .hot{color:var(--hi);font-weight:600}
 .tr .acts{margin-top:8px;flex-wrap:wrap}
 @media(max-width:420px){.tr{grid-template-columns:104px minmax(0,1fr)}}
+.best{border:1px solid rgba(255,210,63,.35);background:linear-gradient(180deg,rgba(255,210,63,.06),transparent 120px),var(--panel)}
+.score{flex:none;width:46px;height:46px;border-radius:12px;background:var(--hi);color:#111;font:900 18px Montserrat,sans-serif;display:flex;align-items:center;justify-content:center}
+.pick{display:grid;grid-template-columns:46px minmax(0,1fr);gap:12px;padding:12px 0;border-top:1px solid var(--line)}
+.pick:first-of-type{border-top:0}
+.pick b{display:block;font-size:15px;line-height:1.3}
+.pick small{display:block;margin-top:2px;font-size:12.5px}
+.pick .thumb{border-radius:8px;margin:8px 0 2px;max-width:220px}
+.why{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.why em{font-style:normal;font-size:12px;background:#2c3038;border-radius:6px;padding:3px 7px;color:var(--ink)}
+.why em.top{background:rgba(255,210,63,.16);color:var(--hi)}
 #toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#2b2f37;border:1px solid var(--line);padding:10px 16px;border-radius:12px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s;width:max-content;max-width:90vw;z-index:9}
 #toast.show{opacity:1}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -154,6 +164,12 @@ input[type=text],select{background:var(--panel2);border:1px solid var(--line);bo
           <label>Sort by<select id="tSort"><option value="hot">Hot right now</option><option value="views">Most views</option></select></label>
         </div>
         <p class="mute small" style="margin-top:10px">“Hot right now” ranks clips by views per hour, so new clips that are taking off rise to the top. You can watch these, but Twitch only lets you download clips you made yourself, so use them for ideas or to find timestamps in footage a clipping program gives you.</p>
+      </section>
+      <button class="btn primary wide" id="bestBtn" style="margin-top:14px">Find the best clips</button>
+      <section class="card best" id="bestCard" hidden>
+        <h2>Best picks <span class="n" id="bestCount"></span><button class="btn mini" id="bestClose" style="margin-left:auto">Close</button></h2>
+        <p class="mute small" id="bestNote"></p>
+        <div id="bestList"></div>
       </section>
       <section class="card">
         <h2>Popular clips <span class="n" id="tCount"></span><button class="btn mini" id="tRefresh" style="margin-left:auto">Refresh</button></h2>
@@ -363,6 +379,7 @@ async function loadTrend() {
     const qs = new URLSearchParams({ scope: tScope, range: $('#tRange').value, game: $('#tGame').value.trim() });
     tData = await fetch('/api/trending?' + qs, { headers: { 'x-clipkit-key': key } }).then(async (r) => { const j = await r.json(); if (!r.ok) throw new Error(j.error || 'Could not load clips.'); return j; });
     renderTrend();
+    if (!$('#bestCard').hidden) renderBest();
   } catch (e) { $('#tList').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 }
 function renderTrend() {
@@ -381,6 +398,69 @@ function renderTrend() {
   }).join('');
 }
 $('#tList').onclick = (e) => { const b = e.target.closest('[data-hide]'); if (!b) return; hidden.add(b.dataset.hide); saveHidden(); renderTrend(); };
+
+/* ---------- Best picks: score the trending clips ---------- */
+const median = (a) => { if (!a.length) return 0; const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+const pctRank = (vals) => { const idx = vals.map((v, i) => [v, i]).sort((a, b) => a[0] - b[0]), out = new Array(vals.length); idx.forEach(([, i], r) => { out[i] = vals.length > 1 ? r / (vals.length - 1) : 1; }); return out; };
+function findBest(clips) {
+  const pool = clips.filter((c) => !hidden.has(c.id));
+  // 1. group clips of the same moment (same VOD, starting within 40 s; or same streamer within 90 s)
+  const moments = [];
+  for (const c of pool.slice().sort((a, b) => b.views - a.views)) {
+    const t = Date.parse(c.created);
+    const m = moments.find((x) => x.bid === c.bid && (c.video && x.video === c.video && c.vodOffset != null && x.vodOffset != null ? Math.abs(x.vodOffset - c.vodOffset) <= 40 : Math.abs(x.t - t) <= 90000));
+    if (m) { m.clips.push(c); m.views += c.views; m.people.add(c.byId || c.by); m.featured = m.featured || c.featured; }
+    else moments.push({ best: c, clips: [c], bid: c.bid, video: c.video, vodOffset: c.vodOffset, t, views: c.views, people: new Set([c.byId || c.by]), featured: c.featured });
+  }
+  if (!moments.length) return [];
+  // 2. how each clip compares with that streamer's usual clip
+  // (compares views per hour, so a fresh clip isn't punished for being new)
+  const rate = (c) => c.views / Math.max(0.25, (Date.now() - Date.parse(c.created)) / 3600000);
+  const byStreamer = {};
+  for (const c of pool) (byStreamer[c.bid] = byStreamer[c.bid] || []).push(rate(c));
+  for (const m of moments) {
+    m.hours = Math.max(0.25, (Date.now() - m.t) / 3600000);
+    m.perHour = m.views / m.hours;
+    const list = byStreamer[m.bid] || [], med = median(list);
+    m.standout = list.length >= 3 && med > 0 ? m.perHour / med : 1;
+    m.dur = m.best.duration;
+  }
+  const P = pctRank(moments.map((m) => Math.log1p(m.views))), V = pctRank(moments.map((m) => Math.log1p(m.perHour))), O = pctRank(moments.map((m) => Math.log(m.standout + 0.01)));
+  moments.forEach((m, i) => {
+    const crowd = m.people.size >= 3 ? 1 : m.people.size === 2 ? 0.6 : 0;
+    const lenFit = m.dur >= 12 && m.dur <= 45 ? 1 : m.dur < 8 ? 0.3 : 0.6;
+    const fresh = m.hours <= 24 ? 1 : m.hours <= 72 ? 0.6 : 0.3;
+    m.parts = { momentum: V[i], views: P[i], standout: O[i], crowd, lenFit, fresh };
+    m.score = Math.round(100 * (0.32 * V[i] + 0.12 * P[i] + 0.28 * O[i] + 0.14 * crowd + 0.08 * lenFit + 0.06 * fresh) + (m.featured ? 3 : 0));
+    const why = [];
+    if (m.standout >= 2) why.push({ k: m.standout, top: m.standout >= 4, t: `${m.standout >= 10 ? Math.round(m.standout) : m.standout.toFixed(1)}× faster than ${m.best.name}'s usual clip` });
+    if (m.people.size >= 2) why.push({ k: 5 + m.people.size, top: m.people.size >= 3, t: `${m.people.size} people clipped this moment` });
+    if (V[i] >= 0.75) why.push({ k: 4, top: V[i] >= 0.9, t: `Taking off: ${num(Math.round(m.perHour))} views/hour` });
+    if (P[i] >= 0.8) why.push({ k: 3, top: false, t: `${num(m.views)} views` });
+    if (m.featured) why.push({ k: 2, top: false, t: 'Featured by the streamer' });
+    if (lenFit === 1) why.push({ k: 1, top: false, t: `Good length (${Math.round(m.dur)}s)` });
+    else if (m.dur > 45) why.push({ k: 0, top: false, t: `Long (${Math.round(m.dur)}s), trim it` });
+    m.why = why.sort((a, b) => b.k - a.k).slice(0, 4);
+  });
+  // 3. best first, at most 3 per streamer so one channel can't fill the list
+  const out = [], per = {};
+  for (const m of moments.sort((a, b) => b.score - a.score)) { if ((per[m.bid] = (per[m.bid] || 0) + 1) > 3) continue; out.push(m); if (out.length >= 8) break; }
+  return out;
+}
+function renderBest() {
+  if (!tData) return;
+  const picks = findBest(tData.clips);
+  $('#bestCard').hidden = false;
+  $('#bestCount').textContent = picks.length ? String(picks.length) : '';
+  $('#bestNote').textContent = picks.length ? `Ranked ${tData.clips.filter((c) => !hidden.has(c.id)).length} clips by how fast they're growing, how they compare with the streamer's usual clips, how many people clipped the same moment, total views and length. Clips of the same moment are merged.` : '';
+  $('#bestList').innerHTML = picks.length ? picks.map((m) => {
+    const c = m.best, vod = c.video && c.vodOffset != null ? vodTime(c.vodOffset) : null;
+    return `<div class="pick"><div class="score" title="Score out of 100">${Math.min(99, m.score)}</div><div><b>${esc(c.title)}</b><small class="mute">${esc(c.name)} · ${ago(m.t)} · ${num(m.views)} views${m.clips.length > 1 ? ` across ${m.clips.length} clips` : ''}</small><div class="why">${m.why.map((w) => `<em class="${w.top ? 'top' : ''}">${esc(w.t)}</em>`).join('')}</div><div class="thumb" style="background-image:url('${esc(c.thumb)}')"><span>${Math.round(c.duration)}s</span></div><div class="acts" style="margin-top:8px;flex-wrap:wrap"><a class="btn mini" href="${esc(c.url)}" target="_blank" rel="noopener">Watch</a>${vod ? `<a class="btn mini" href="https://www.twitch.tv/videos/${esc(c.video)}?t=${vod.q}" target="_blank" rel="noopener">Clip it yourself (VOD ${vod.label})</a>` : ''}<button class="btn mini" data-hide="${esc(c.id)}">Hide</button></div></div></div>`;
+  }).join('') : '<div class="empty">No clips to rank yet. Try a longer time range or add more streamers.</div>';
+}
+$('#bestBtn').onclick = async () => { if (!tData) await loadTrend(); renderBest(); if (tData) $('#bestCard').scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+$('#bestClose').onclick = () => { $('#bestCard').hidden = true; };
+$('#bestList').onclick = (e) => { const b = e.target.closest('[data-hide]'); if (!b) return; hidden.add(b.dataset.hide); saveHidden(); renderTrend(); renderBest(); };
 
 function loop() { clearTimeout(pollT); if (!document.hidden) refresh(); pollT = setTimeout(loop, 5000); }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) loop(); });

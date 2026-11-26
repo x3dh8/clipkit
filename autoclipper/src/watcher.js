@@ -478,13 +478,13 @@ export class Watcher {
     } else {
       if (!this.cfg.streamers.length) return { clips: [], note: 'Add streamers on the Auto clips tab first.' };
       const lists = await Promise.all(this.cfg.streamers.map((s) =>
-        this.helix('/clips', { query: { broadcaster_id: s.id, started_at: started, ended_at: ended, first: '25' } }).then((j) => j.data || []).catch(() => [])));
+        this.helix('/clips', { query: { broadcaster_id: s.id, started_at: started, ended_at: ended, first: '50' } }).then((j) => j.data || []).catch(() => [])));
       raw = lists.flat();
     }
     const mine = new Set(this.clips.map((c) => c.id));
     const clips = raw.map((c) => {
       const hours = Math.max(0.25, (this.now() - Date.parse(c.created_at)) / 3600000);
-      return { id: c.id, url: c.url, title: c.title, name: c.broadcaster_name, by: c.creator_name, views: c.view_count, created: c.created_at,
+      return { id: c.id, url: c.url, title: c.title, name: c.broadcaster_name, bid: c.broadcaster_id, by: c.creator_name, byId: c.creator_id, featured: !!c.is_featured, lang: c.language, views: c.view_count, created: c.created_at,
         perHour: Math.round(c.view_count / hours), duration: c.duration, thumb: c.thumbnail_url, video: c.video_id || '', vodOffset: c.vod_offset == null ? null : c.vod_offset, mine: mine.has(c.id) };
     });
     const data = { clips, game: game && game.name, at: this.now() };
