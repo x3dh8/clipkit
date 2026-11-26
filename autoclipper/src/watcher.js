@@ -23,7 +23,8 @@ const BOTS = new Set(['nightbot', 'streamelements', 'moobot', 'fossabot', 'strea
 // How long to ignore chat after events that make chat explode for reasons other than gameplay
 const QUIET = { raid: 90, unraid: 30, sub_gift: 20, community_sub_gift: 45, gift_paid_upgrade: 15, prime_paid_upgrade: 10, pay_it_forward: 15, sub: 8, resub: 8, bits_badge_tier: 15, charity_donation: 20, announcement: 20, watch_streak: 5 };
 
-const defaultCfg = () => ({ clientId: '', enabled: true, streamers: [], sensitivity: 'normal', clipLen: 30, maxPerStream: 5, cooldown: 120 });
+const defaultCfg = () => ({ clientId: '', enabled: true, streamers: [], sensitivity: 'normal', clipLen: 30, maxPerStream: 5, cooldown: 120, discord: '', alerts: true, digestOn: false, digestHour: 8, tz: 'America/Denver' });
+const WEBHOOK_RE = /^https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[\w-]+$/;
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
@@ -76,6 +77,44 @@ class ChannelStats {
   }
 }
 
+function median(a) { if (!a.length) return 0; const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
+function pctRank(vals) { const idx = vals.map((v, i) => [v, i]).sort((a, b) => a[0] - b[0]), out = new Array(vals.length); idx.forEach(([, i], r) => { out[i] = vals.length > 1 ? r / (vals.length - 1) : 1; }); return out; }
+function numFmt(n) { return n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + 'K' : String(Math.round(n)); }
+// Rank raw Twitch clips. Only clips passing `pick` can be chosen; all clips count toward each streamer's normal.
+export function bestMoments(raw, now, pick = () => true, limit = 8) {
+  const rate = (c) => c.view_count / Math.max(0.25, (now - Date.parse(c.created_at)) / 3600000);
+  const byStreamer = {};
+  for (const c of raw) (byStreamer[c.broadcaster_id] = byStreamer[c.broadcaster_id] || []).push(rate(c));
+  const moments = [];
+  for (const c of raw.filter(pick).sort((a, b) => b.view_count - a.view_count)) {
+    const t = Date.parse(c.created_at);
+    const m = moments.find((x) => x.bid === c.broadcaster_id && (c.video_id && x.video === c.video_id && c.vod_offset != null && x.vodOffset != null ? Math.abs(x.vodOffset - c.vod_offset) <= 40 : Math.abs(x.t - t) <= 90000));
+    if (m) { m.count++; m.views += c.view_count; m.people.add(c.creator_id); m.featured = m.featured || c.is_featured; }
+    else moments.push({ best: c, count: 1, bid: c.broadcaster_id, video: c.video_id, vodOffset: c.vod_offset, t, views: c.view_count, people: new Set([c.creator_id]), featured: !!c.is_featured });
+  }
+  if (!moments.length) return [];
+  for (const m of moments) {
+    m.hours = Math.max(0.25, (now - m.t) / 3600000); m.perHour = m.views / m.hours;
+    const list = byStreamer[m.bid] || [], med = median(list);
+    m.standout = list.length >= 3 && med > 0 ? m.perHour / med : 1;
+  }
+  const P = pctRank(moments.map((m) => Math.log1p(m.views))), V = pctRank(moments.map((m) => Math.log1p(m.perHour))), O = pctRank(moments.map((m) => Math.log(m.standout + 0.01)));
+  moments.forEach((m, i) => {
+    const dur = m.best.duration, crowd = m.people.size >= 3 ? 1 : m.people.size === 2 ? 0.6 : 0;
+    const lenFit = dur >= 12 && dur <= 45 ? 1 : dur < 8 ? 0.3 : 0.6, fresh = m.hours <= 24 ? 1 : m.hours <= 72 ? 0.6 : 0.3;
+    m.score = Math.min(99, Math.round(100 * (0.32 * V[i] + 0.12 * P[i] + 0.28 * O[i] + 0.14 * crowd + 0.08 * lenFit + 0.06 * fresh) + (m.featured ? 3 : 0)));
+    const why = [];
+    if (m.standout >= 2) why.push([m.standout, `${m.standout >= 10 ? Math.round(m.standout) : m.standout.toFixed(1)}× faster than ${m.best.broadcaster_name}'s usual clip`]);
+    if (m.people.size >= 2) why.push([5 + m.people.size, `${m.people.size} people clipped this moment`]);
+    if (V[i] >= 0.75) why.push([4, `${numFmt(m.perHour)} views/hour`]);
+    if (P[i] >= 0.8) why.push([3, `${numFmt(m.views)} views`]);
+    m.why = why.sort((a, b) => b[0] - a[0]).slice(0, 3).map((x) => x[1]);
+  });
+  const out = [], per = {};
+  for (const m of moments.sort((a, b) => b.score - a.score)) { if ((per[m.bid] = (per[m.bid] || 0) + 1) > 3) continue; out.push(m); if (out.length >= limit) break; }
+  return out;
+}
+
 export class Watcher {
   constructor(ctx, env) {
     this.ctx = ctx; this.env = env; this.st = ctx.storage;
@@ -92,6 +131,7 @@ export class Watcher {
     this.log = (await this.st.get('log')) || [];
     this.live = (await this.st.get('live')) || {};
     this.key = (await this.st.get('key')) || null;
+    this.lastDigest = (await this.st.get('lastDigest')) || '';
   }
 
   now() { return Date.now(); }
@@ -140,6 +180,15 @@ export class Watcher {
         if ([1, 3, 5, 10, 20].includes(+body.maxPerStream)) c.maxPerStream = +body.maxPerStream;
         if ([60, 120, 300, 600].includes(+body.cooldown)) c.cooldown = +body.cooldown;
         if (typeof body.enabled === 'boolean') c.enabled = body.enabled;
+        if (typeof body.discord === 'string') {
+          const w = body.discord.trim();
+          if (w && !WEBHOOK_RE.test(w)) return json({ error: "That isn't a Discord webhook link. It should start with https://discord.com/api/webhooks/" }, 400);
+          c.discord = w;
+        }
+        if (typeof body.alerts === 'boolean') c.alerts = body.alerts;
+        if (typeof body.digestOn === 'boolean') c.digestOn = body.digestOn;
+        if (Number.isInteger(+body.digestHour) && +body.digestHour >= 0 && +body.digestHour <= 23 && body.digestHour !== undefined) c.digestHour = +body.digestHour;
+        if (typeof body.tz === 'string' && body.tz) { try { new Intl.DateTimeFormat('en', { timeZone: body.tz }); c.tz = body.tz; } catch (e) {} }
         await this.st.put('cfg', c); await this.kick(); return json({ ok: true });
       }
       if (path === '/api/clip-now' && method === 'POST') {
@@ -150,6 +199,15 @@ export class Watcher {
       }
       if (path === '/api/clips/download' && method === 'POST') return json(await this.download(body.id));
       if (path === '/api/trending') return json(await this.trending(url.searchParams));
+      if (path === '/api/discord/test' && method === 'POST') {
+        if (!this.cfg.discord) return json({ error: 'Add a Discord webhook link first.' }, 400);
+        await this.discord({ content: '✅ ClipKit Auto is connected. New clips and your morning picks will show up here.' });
+        return json({ ok: true });
+      }
+      if (path === '/api/digest/now' && method === 'POST') {
+        if (!this.cfg.discord) return json({ error: 'Add a Discord webhook link first.' }, 400);
+        return json(await this.sendDigest(true));
+      }
       if (path === '/api/clips/remove' && method === 'POST') {
         this.clips = this.clips.filter((c) => c.id !== body.id); await this.st.put('clips', this.clips); return json({ ok: true });
       }
@@ -164,7 +222,8 @@ export class Watcher {
     return {
       clientId: !!this.cfg.clientId,
       connected: !!(this.auth && !this.auth.broken), login: this.auth && this.auth.login, broken: !!(this.auth && this.auth.broken),
-      cfg: { enabled: this.cfg.enabled, sensitivity: this.cfg.sensitivity, clipLen: this.cfg.clipLen, maxPerStream: this.cfg.maxPerStream, cooldown: this.cfg.cooldown },
+      cfg: { enabled: this.cfg.enabled, sensitivity: this.cfg.sensitivity, clipLen: this.cfg.clipLen, maxPerStream: this.cfg.maxPerStream, cooldown: this.cfg.cooldown,
+        discord: this.cfg.discord ? '…' + this.cfg.discord.slice(-6) : '', alerts: this.cfg.alerts, digestOn: this.cfg.digestOn, digestHour: this.cfg.digestHour, tz: this.cfg.tz },
       chat: !!(this.ws && this.session),
       streamers: this.cfg.streamers.map((s) => {
         const L = this.live[s.id], st = this.stats.get(s.id);
@@ -261,6 +320,8 @@ export class Watcher {
     let anyLive = false;
     try { anyLive = await this.cycle(); }
     catch (e) { this.addLog('Problem: ' + e.message); }
+    try { await this.maybeDigest(); }
+    catch (e) { this.addLog('Morning picks failed: ' + e.message); }
     finally { await this.st.setAlarm(this.now() + (anyLive ? 30000 : 60000)); }
   }
   async cycle() {
@@ -447,7 +508,10 @@ export class Watcher {
     let changed = false;
     for (const c of pending) {
       const f = found.get(c.id);
-      if (f) { c.status = 'ready'; c.thumb = f.thumbnail_url; c.duration = f.duration; c.url = f.url || c.url; changed = true; }
+      if (f) {
+        c.status = 'ready'; c.thumb = f.thumbnail_url; c.duration = f.duration; c.url = f.url || c.url; changed = true;
+        if (this.cfg.discord && this.cfg.alerts) this.alertClip(c).catch((e) => this.addLog('Discord alert failed: ' + e.message));
+      }
       else if (this.now() - c.at > 90000) { c.status = 'failed'; changed = true; }
     }
     if (changed) await this.st.put('clips', this.clips);
@@ -491,6 +555,61 @@ export class Watcher {
     this.trendCache.set(cacheKey, { at: this.now(), data });
     if (this.trendCache.size > 30) this.trendCache.delete(this.trendCache.keys().next().value);
     return data;
+  }
+
+
+  /* ---------------- Discord ---------------- */
+  async discord(payload) {
+    if (!this.cfg.discord) return false;
+    const r = await fetch(this.cfg.discord + '?wait=true', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'ClipKit Auto', allowed_mentions: { parse: [] }, ...payload }) });
+    if (!r.ok) {
+      if (r.status === 404 || r.status === 401) throw new Error('Discord says that webhook no longer exists. Paste a new one.');
+      throw new Error(`Discord said ${r.status}.`);
+    }
+    return true;
+  }
+  async alertClip(c) {
+    const lines = [];
+    if (c.top && c.top.length) lines.push('Chat: ' + c.top.join(', '));
+    if (c.game) lines.push('Playing ' + c.game);
+    await this.discord({ embeds: [{ title: `${c.name}: ${c.why}`.slice(0, 250), url: c.url, description: lines.join('\n') || undefined, color: 0xff4f5e,
+      image: c.thumb ? { url: c.thumb } : undefined, footer: { text: c.manual ? 'You tapped Clip now' : 'Auto clipped' }, timestamp: new Date(c.at).toISOString() }] });
+  }
+  localNow() {
+    let p;
+    try { p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: this.cfg.tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(this.now())).map((x) => [x.type, x.value])); }
+    catch (e) { const d = new Date(this.now()); return { day: d.toISOString().slice(0, 10), hour: d.getUTCHours() }; }
+    return { day: `${p.year}-${p.month}-${p.day}`, hour: +p.hour % 24 };
+  }
+  async maybeDigest() {
+    if (!this.cfg.digestOn || !this.cfg.discord || !this.auth || this.auth.broken || !this.cfg.streamers.length) return;
+    const { day, hour } = this.localNow();
+    if (this.lastDigest === day || hour < this.cfg.digestHour || hour > this.cfg.digestHour + 2) return;
+    this.lastDigest = day; await this.st.put('lastDigest', day);
+    await this.sendDigest(false);
+  }
+  async sendDigest(manual) {
+    const since = this.now() - 14 * 3600 * 1000;
+    const started = new Date(this.now() - 72 * 3600 * 1000).toISOString();
+    const lists = await Promise.all(this.cfg.streamers.map((s) =>
+      this.helix('/clips', { query: { broadcaster_id: s.id, started_at: started, first: '100' } }).then((j) => j.data || []).catch(() => [])));
+    const raw = lists.flat();
+    const picks = bestMoments(raw, this.now(), (c) => Date.parse(c.created_at) >= since, 5);
+    const mine = this.clips.filter((c) => c.at >= since && c.status === 'ready');
+    const head = manual ? 'Best clips from the last 14 hours' : 'Good morning. Best clips from while you were away';
+    if (!picks.length && !mine.length) {
+      await this.discord({ content: `**${head}:** nothing stood out. Quiet night.` });
+      return { ok: true, picks: 0 };
+    }
+    const embeds = picks.map((m) => {
+      const c = m.best, off = c.vod_offset;
+      const vod = c.video_id && off != null ? `\n[Clip it yourself from the VOD](https://www.twitch.tv/videos/${c.video_id}?t=${Math.floor(off / 3600)}h${Math.floor(off % 3600 / 60)}m${Math.floor(off % 60)}s)` : '';
+      return { title: `${m.score} · ${c.title}`.slice(0, 250), url: c.url, color: 0xffd23f, description: `**${c.broadcaster_name}** · ${m.why.join(' · ') || numFmt(m.views) + ' views'}${vod}`, thumbnail: c.thumbnail_url ? { url: c.thumbnail_url } : undefined };
+    });
+    const mineLine = mine.length ? `\nYour auto clipper made **${mine.length}** clip${mine.length === 1 ? '' : 's'} overnight. Open the page to download ${mine.length === 1 ? 'it' : 'them'}.` : '';
+    await this.discord({ content: `**${head}:**${mineLine}`, embeds });
+    this.addLog(`Sent ${picks.length} morning pick${picks.length === 1 ? '' : 's'} to Discord.`);
+    return { ok: true, picks: picks.length };
   }
 
   async download(id) {

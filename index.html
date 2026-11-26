@@ -322,6 +322,7 @@ a.btn.primary{color:#fff}
       <label>Frame rate<select id="bFps"><option value="30" selected>30 fps</option><option value="60">60 fps</option></select></label>
     </div>
     <label class="chk"><input type="checkbox" id="bCaps" checked> Auto captions</label>
+      <label class="chk"><input type="checkbox" id="bTrim"> Cut the slow part at the start</label>
     <div class="grid2"><label>Caption model<select id="bModel"><option value="Xenova/whisper-tiny.en" selected>Fast (English)</option><option value="Xenova/whisper-base.en">Accurate (English)</option><option value="Xenova/whisper-base">Any language</option></select></label>
     <label>Title on top<select id="bHookWhen"><option value="all">Whole video</option><option value="start">First 3 seconds</option></select></label></div>
     <label class="chk"><input type="checkbox" id="bHook" checked> Show the title on top</label>
@@ -1426,11 +1427,11 @@ function drawHook(c, text) {
   lines.forEach((l, i) => c.fillText(l, OW / 2, y + pad * 0.7 + lh * (i + 0.5)));
   c.restore();
 }
-function bOpts() { return { layout: $('#bLayout').value, caps: $('#bCaps').checked, hook: $('#bHook').checked, hookWhen: $('#bHookWhen').value, fps: +$('#bFps').value, model: $('#bModel').value }; }
+function bOpts() { return { layout: $('#bLayout').value, caps: $('#bCaps').checked, trim: $('#bTrim').checked, hook: $('#bHook').checked, hookWhen: $('#bHookWhen').value, fps: +$('#bFps').value, model: $('#bModel').value }; }
 function drawBatchFrame(it, t, o) {
   renderVideo(bctx2, bv, o.layout, 1);
   if (o.caps && it.groups && it.groups.length) drawCapsOn(bctx2, it.groups, t);
-  if (o.hook && (o.hookWhen === 'all' || t < 3.2)) drawHook(bctx2, it.hook);
+  if (o.hook && (o.hookWhen === 'all' || t - (it.start || 0) < 3.2)) drawHook(bctx2, it.hook);
 }
 async function addBatchFiles(files) {
   const list = files.filter((f) => /^video\//.test(f.type) || /\.(mp4|mov|webm|mkv|m4v)$/i.test(f.name));
@@ -1468,6 +1469,30 @@ $('#bShareAll').onclick = async () => {
 $('#bAdd').onclick = () => $('#bFiles').click();
 $('#bFiles').onchange = (e) => { const fs = Array.from(e.target.files); e.target.value = ''; addBatchFiles(fs); };
 function seekEl(v, t) { return new Promise((r) => { const to = setTimeout(r, 3000); v.addEventListener('seeked', () => { clearTimeout(to); r(); }, { once: true }); v.currentTime = t; }); }
+
+// Find where the action begins so the video can skip the slow lead-up.
+async function findActionStart(it) {
+  const fr = await scanFrames(it.url, () => {});
+  const nb = fr.nb, dur = fr.dur;
+  if (dur < 8) return 0;
+  const parts = [[0.6, pct(smooth(fr.mot, 1))], [0.15, pct(smooth(fr.fl, 1))]];
+  let af = null;
+  try { const pcm = await decodePCM(it.file); af = audioFeatures(pcm, nb); parts.push([0.25, pct(smooth(af.on, 1))]); }
+  catch (e) { parts[0][0] = 0.8; parts[1][0] = 0.2; }
+  const sc = smooth(Float32Array.from({ length: nb }, (_, i) => parts.reduce((a, [w, arr]) => a + w * arr[i], 0)), 2);
+  let pk = 0; for (let i = 1; i < nb; i++) if (sc[i] > sc[pk]) pk = i;
+  const sorted = Array.from(sc).sort((a, b) => a - b), med = sorted[nb >> 1], thr = med + 0.45 * (sc[pk] - med);
+  let a = pk; while (a > 0 && sc[a - 1] >= thr) a--;
+  // only cut if the lead-up is clearly calmer than the action (no cut for clips that are busy the whole way)
+  const mean = (arr, i0, i1) => { let s = 0, n = 0; for (let i = Math.max(0, i0); i < Math.min(arr.length, i1); i++) { s += arr[i]; n++; } return n ? s / n : 0; };
+  const L = Math.round(4 / BIN);
+  const calmer = mean(fr.mot, a, a + L) >= 2 * mean(fr.mot, 0, a) + 0.5;
+  const quieter = af && mean(af.db, a, a + L) >= mean(af.db, 0, a) + 6;
+  if (!calmer && !quieter) return 0;
+  let start = a * BIN - 1.0;
+  start = Math.min(start, dur * 0.5, dur - 5);
+  return start >= 1.5 ? Math.round(start * 10) / 10 : 0;
+}
 async function makeOne(it, o, idx, total) {
   it.status = 'working'; it.msg = 'Loading…'; it.note = ''; renderBList();
   if (bv.src !== it.url) { bv.src = it.url; await new Promise((r, j) => { bv.onloadeddata = r; bv.onerror = () => j(new Error("Couldn't open this video.")); }); }
@@ -1480,8 +1505,14 @@ async function makeOne(it, o, idx, total) {
       it.note = words.length ? '' : 'no speech found, so no captions';
     } catch (err) { it.groups = []; it.note = 'captions failed, made it without them'; }
   }
+  it.start = 0;
+  if (o.trim) {
+    it.msg = 'Finding where the action starts…'; renderBListMsg(it); bStatusLine(prefix + it.msg, null);
+    try { it.start = await findActionStart(it); } catch (e) { it.start = 0; }
+    if (it.start > 0) it.note = (it.note ? it.note + ' · ' : '') + `cut ${it.start.toFixed(1)}s from the start`;
+  }
   if (B.stop) throw new Error('stopped');
-  await seekEl(bv, 0); drawBatchFrame(it, 0, o);
+  await seekEl(bv, it.start); drawBatchFrame(it, it.start, o);
   const mime = pickMime();
   if (!mime || !bcv.captureStream) throw new Error("This browser can't record video.");
   const stream = bcv.captureStream(o.fps);
@@ -1490,14 +1521,15 @@ async function makeOne(it, o, idx, total) {
   const parts = []; rec.ondataavailable = (e) => { if (e.data.size) parts.push(e.data); };
   rec.start(500);
   await bv.play();
-  const dur = bv.duration || 60;
+  const dur = bv.duration || 60, s0 = it.start || 0, span = Math.max(0.1, dur - s0);
   await new Promise((res) => {
     const f = () => {
       const t = bv.currentTime;
       drawBatchFrame(it, t, o);
-      it.msg = `Exporting… ${Math.round(t / dur * 100)}%`; renderBListMsg(it);
-      bStatusLine(prefix + it.msg, (idx + t / dur) / total);
-      if (bv.ended || B.stop || bv.paused && t > 0.1) { res(); return; }
+      const done = Math.min(1, Math.max(0, (t - s0) / span));
+      it.msg = `Exporting… ${Math.round(done * 100)}%`; renderBListMsg(it);
+      bStatusLine(prefix + it.msg, (idx + done) / total);
+      if (bv.ended || B.stop || bv.paused && t > s0 + 0.1) { res(); return; }
       requestAnimationFrame(f);
     };
     requestAnimationFrame(f);
@@ -1545,7 +1577,7 @@ $('#bGo').onclick = async () => {
   $('#bGo').textContent = 'Make all videos'; renderBList();
   bStatusLine(stopped ? `Stopped. ${ok} video${ok === 1 ? '' : 's'} made.` : `Done: ${ok} of ${todo.length} video${todo.length === 1 ? '' : 's'} made. Save them below.`, stopped ? null : 1);
 };
-try { const o = JSON.parse(localStorage.getItem('clipkit-batch') || 'null'); if (o) { $('#bLayout').value = o.layout; $('#bCaps').checked = o.caps; $('#bHook').checked = o.hook; $('#bHookWhen').value = o.hookWhen; $('#bFps').value = String(o.fps); $('#bModel').value = o.model; } } catch (e) {}
+try { const o = JSON.parse(localStorage.getItem('clipkit-batch') || 'null'); if (o) { $('#bLayout').value = o.layout; $('#bCaps').checked = o.caps; $('#bTrim').checked = !!o.trim; $('#bHook').checked = o.hook; $('#bHookWhen').value = o.hookWhen; $('#bFps').value = String(o.fps); $('#bModel').value = o.model; } } catch (e) {}
 renderBList();
 if (location.hash === '#batch') setTimeout(() => setView('batch'), 0);
 

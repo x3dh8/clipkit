@@ -105,6 +105,12 @@ input[type=text],select{background:var(--panel2);border:1px solid var(--line);bo
 .why{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
 .why em{font-style:normal;font-size:12px;background:#2c3038;border-radius:6px;padding:3px 7px;color:var(--ink)}
 .why em.top{background:rgba(255,210,63,.16);color:var(--hi)}
+.chk{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:14px;min-height:32px}
+.chk input{width:20px;height:20px;accent-color:var(--acc);flex:none}
+.chk.off{opacity:.45}
+details{margin:8px 0 10px;font-size:13.5px}
+details summary{cursor:pointer;color:#7cc4ff;min-height:32px;display:flex;align-items:center}
+details ol{margin-top:6px}
 #toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#2b2f37;border:1px solid var(--line);padding:10px 16px;border-radius:12px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s;width:max-content;max-width:90vw;z-index:9}
 #toast.show{opacity:1}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -212,6 +218,30 @@ input[type=text],select{background:var(--panel2);border:1px solid var(--line);bo
     </section>
 
     <section class="card">
+      <h2>Discord</h2>
+      <div id="dcSet" hidden>
+        <p class="small">Sending to your webhook <code id="dcMask"></code></p>
+        <div class="row"><button class="btn" id="dcTest" style="flex:1">Send a test message</button><button class="btn" id="dcRemove">Remove</button></div>
+      </div>
+      <div id="dcNew">
+        <p class="mute small">Get a Discord message when a clip is made, and a list of the best clips each morning. Paste a webhook link from a Discord server you manage. A private server just for you works great.</p>
+        <details><summary>How to get a webhook link</summary><ol>
+          <li>In Discord, open your server and go to <b>Server Settings → Integrations → Webhooks</b>.</li>
+          <li>Tap <b>New Webhook</b>, pick the channel the messages should go to, and tap <b>Copy Webhook URL</b>.</li>
+          <li>Paste it below.</li></ol></details>
+        <div class="row"><input type="text" id="dcIn" placeholder="https://discord.com/api/webhooks/…" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn primary" id="dcSave">Save</button></div>
+        <div class="err" id="dcErr"></div>
+      </div>
+      <label class="chk" id="alertsRow"><input type="checkbox" id="alertsOn"> Message me every time it makes a clip</label>
+      <label class="chk" id="digestRow"><input type="checkbox" id="digestOn"> Morning picks: the best clips from overnight</label>
+      <div class="grid2" id="digestOpts">
+        <label>Send them at<select id="digestHour"><option value="5">5 AM</option><option value="6">6 AM</option><option value="7">7 AM</option><option value="8">8 AM</option><option value="9">9 AM</option><option value="10">10 AM</option><option value="11">11 AM</option><option value="12">12 PM</option></select></label>
+        <label>&nbsp;<button class="btn" id="digestNow">Send picks now</button></label>
+      </div>
+      <p class="mute small" id="tzNote" style="margin-top:8px"></p>
+    </section>
+
+    <section class="card">
       <h2>Activity</h2>
       <ul class="log" id="log"></ul>
     </section>
@@ -279,6 +309,13 @@ function render() {
   }).join('') : '<div class="empty">No clips yet. When chat explodes on a live stream, clips show up here.</div>';
   for (const b of $('#sens').children) b.classList.toggle('on', b.dataset.v === s.cfg.sensitivity);
   $('#sensHint').textContent = SENS_HINT[s.cfg.sensitivity];
+  const hasDc = !!s.cfg.discord;
+  $('#dcSet').hidden = !hasDc; $('#dcNew').hidden = hasDc; $('#dcMask').textContent = s.cfg.discord;
+  $('#alertsOn').checked = s.cfg.alerts; $('#digestOn').checked = s.cfg.digestOn;
+  for (const id of ['#alertsOn', '#digestOn', '#digestHour', '#digestNow']) $(id).disabled = !hasDc;
+  $('#alertsRow').classList.toggle('off', !hasDc); $('#digestRow').classList.toggle('off', !hasDc);
+  if (document.activeElement !== $('#digestHour')) $('#digestHour').value = String(s.cfg.digestHour);
+  $('#tzNote').textContent = s.cfg.digestOn && hasDc ? `Morning picks go out between ${s.cfg.digestHour % 12 || 12} ${s.cfg.digestHour < 12 ? 'AM' : 'PM'} and ${(s.cfg.digestHour + 2) % 12 || 12} ${(s.cfg.digestHour + 2) < 12 ? 'AM' : 'PM'} your time (${s.cfg.tz}), covering the last 14 hours.` : '';
   $('#clipLen').value = s.cfg.clipLen; $('#maxPer').value = s.cfg.maxPerStream; $('#cooldown').value = s.cfg.cooldown;
   $('#log').innerHTML = s.log.length ? s.log.map((l) => `<li><time>${clock(l.at)}</time><span>${esc(l.text)}</span></li>`).join('') : '<li><span class="mute">Nothing yet.</span></li>';
 }
@@ -461,6 +498,25 @@ function renderBest() {
 $('#bestBtn').onclick = async () => { if (!tData) await loadTrend(); renderBest(); if (tData) $('#bestCard').scrollIntoView({ behavior: 'smooth', block: 'start' }); };
 $('#bestClose').onclick = () => { $('#bestCard').hidden = true; };
 $('#bestList').onclick = (e) => { const b = e.target.closest('[data-hide]'); if (!b) return; hidden.add(b.dataset.hide); saveHidden(); renderTrend(); renderBest(); };
+
+/* ---------- Discord ---------- */
+const myTz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (e) { return ''; } })();
+$('#dcSave').onclick = async () => {
+  $('#dcErr').textContent = '';
+  try { await api('/api/config', { discord: $('#dcIn').value, tz: myTz }); $('#dcIn').value = ''; await api('/api/discord/test', {}); toast('Saved. Check Discord for a test message.'); refresh(); }
+  catch (e) { $('#dcErr').textContent = e.message; }
+};
+$('#dcTest').onclick = async () => { try { await api('/api/discord/test', {}); toast('Sent. Check Discord.'); } catch (e) { toast(e.message); } };
+$('#dcRemove').onclick = async () => { try { await api('/api/config', { discord: '' }); refresh(); } catch (e) { toast(e.message); } };
+$('#alertsOn').onchange = async (e) => { try { await api('/api/config', { alerts: e.target.checked }); refresh(); } catch (err) { toast(err.message); } };
+$('#digestOn').onchange = async (e) => { try { await api('/api/config', { digestOn: e.target.checked, tz: myTz }); refresh(); } catch (err) { toast(err.message); } };
+$('#digestHour').onchange = async (e) => { try { await api('/api/config', { digestHour: +e.target.value, tz: myTz }); toast('Saved'); refresh(); } catch (err) { toast(err.message); } };
+$('#digestNow').onclick = async () => {
+  const b = $('#digestNow'); b.disabled = true; b.textContent = 'Sending…';
+  try { const r = await api('/api/digest/now', {}); toast(r.picks ? `Sent ${r.picks} picks to Discord.` : 'Sent. Nothing stood out in the last 14 hours.'); }
+  catch (e) { toast(e.message); }
+  finally { b.disabled = false; b.textContent = 'Send picks now'; }
+};
 
 function loop() { clearTimeout(pollT); if (!document.hidden) refresh(); pollT = setTimeout(loop, 5000); }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) loop(); });
