@@ -29,7 +29,7 @@ const BOTS = new Set(['nightbot', 'streamelements', 'moobot', 'fossabot', 'strea
 // How long to ignore chat after events that make chat explode for reasons other than gameplay
 const QUIET = { raid: 90, unraid: 30, sub_gift: 20, community_sub_gift: 45, gift_paid_upgrade: 15, prime_paid_upgrade: 10, pay_it_forward: 15, sub: 8, resub: 8, bits_badge_tier: 15, charity_donation: 20, announcement: 20, watch_streak: 5 };
 
-const defaultCfg = () => ({ clientId: '', enabled: true, streamers: [], sensitivity: 'normal', clipLen: 30, maxPerStream: 5, cooldown: 120, discord: '', alerts: true, digestOn: false, digestHour: 8, tz: 'America/Denver' });
+const defaultCfg = () => ({ clientId: '', enabled: true, streamers: [], sensitivity: 'normal', clipLen: 30, maxPerStream: 5, cooldown: 120, discord: '', alerts: true, digestOn: false, digestHour: 8, tz: 'America/Denver', ytKey: '' });
 const WEBHOOK_RE = /^https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[\w-]+$/;
 
 function json(data, status = 200) {
@@ -133,7 +133,7 @@ export class Watcher {
     this.ctx = ctx; this.env = env; this.st = ctx.storage;
     this.ws = null; this.session = null; this.subs = new Map(); this.stats = new Map();
     this.tickTimer = null; this.lastWsAt = 0; this.keepaliveSec = 10;
-    this.refreshing = null; this.connecting = null; this.welcomeWait = null; this.device = null; this.trendCache = new Map(); this.gameCache = new Map();
+    this.refreshing = null; this.connecting = null; this.welcomeWait = null; this.device = null; this.trendCache = new Map(); this.gameCache = new Map(); this.ytCache = new Map();
     this.ready = this.load();
   }
 
@@ -145,6 +145,7 @@ export class Watcher {
     this.live = (await this.st.get('live')) || {};
     this.key = (await this.st.get('key')) || null;
     this.lastDigest = (await this.st.get('lastDigest')) || '';
+    this.ytUsage = (await this.st.get('ytUsage')) || { day: '', units: 0 };
   }
 
   now() { return Date.now(); }
@@ -225,6 +226,16 @@ export class Watcher {
       if (path === '/api/clips/download' && method === 'POST') return json(await this.download(body.id));
       if (path === '/api/trending') return json(await this.trending(url.searchParams));
       if (path === '/api/ai/moments' && method === 'POST') return json(await this.aiMoments(body));
+      if (path === '/api/youtube/key' && method === 'POST') {
+        const k = String(body.key || '').trim();
+        if (!k) { this.cfg.ytKey = ''; await this.st.put('cfg', this.cfg); return json({ ok: true }); }
+        if (!/^[\w-]{30,60}$/.test(k)) return json({ error: "That doesn't look like a Google API key. It usually starts with AIza." }, 400);
+        const t = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=id&id=dQw4w9WgXcQ&key=${encodeURIComponent(k)}`);
+        if (!t.ok) { const j = await t.json().catch(() => ({})); return json({ error: 'Google refused that key: ' + ((j.error && j.error.message) || t.status) + '. Make sure YouTube Data API v3 is enabled for it.' }, 400); }
+        this.cfg.ytKey = k; await this.st.put('cfg', this.cfg); this.addYtUnits(1);
+        return json({ ok: true });
+      }
+      if (path === '/api/youtube') return json(await this.youtube(url.searchParams));
       if (path === '/api/streamers/check-editor' && method === 'POST') {
         const s = this.cfg.streamers.find((x) => x.id === body.id); if (!s) return json({ error: 'Unknown streamer' }, 400);
         return json({ editor: await this.checkEditor(s) });
@@ -260,7 +271,7 @@ export class Watcher {
       clientId: !!this.cfg.clientId,
       connected: !!(this.auth && !this.auth.broken), login: this.auth && this.auth.login, broken: !!(this.auth && this.auth.broken),
       cfg: { enabled: this.cfg.enabled, sensitivity: this.cfg.sensitivity, clipLen: this.cfg.clipLen, maxPerStream: this.cfg.maxPerStream, cooldown: this.cfg.cooldown,
-        discord: this.cfg.discord ? '…' + this.cfg.discord.slice(-6) : '', alerts: this.cfg.alerts, digestOn: this.cfg.digestOn, digestHour: this.cfg.digestHour, tz: this.cfg.tz },
+        discord: this.cfg.discord ? '…' + this.cfg.discord.slice(-6) : '', yt: !!this.cfg.ytKey, alerts: this.cfg.alerts, digestOn: this.cfg.digestOn, digestHour: this.cfg.digestHour, tz: this.cfg.tz },
       chat: !!(this.ws && this.session),
       streamers: this.cfg.streamers.map((s) => {
         const L = this.live[s.id], st = this.stats.get(s.id);
@@ -770,6 +781,65 @@ export class Watcher {
       start: +m.start, end: +m.end, title: String(m.title || '').slice(0, 90), type: String(m.type || 'other'), reason: String(m.reason || '').slice(0, 200), score: Math.max(1, Math.min(10, Math.round(+m.score || 5)))
     })).filter((m) => isFinite(m.start) && isFinite(m.end) && m.end - m.start >= LEN[0] * 0.6 && m.end - m.start <= LEN[1] * 1.6 && m.start >= first - 5 && m.end <= last + 30 && m.title);
     return { moments };
+  }
+
+
+  /* ---------------- YouTube: what clippers are posting ---------------- */
+  ytDay() { return this.localNow().day; }
+  addYtUnits(n) {
+    const d = this.ytDay();
+    if (this.ytUsage.day !== d) this.ytUsage = { day: d, units: 0 };
+    this.ytUsage.units += n; this.st.put('ytUsage', this.ytUsage);
+  }
+  async yt(path, params, units) {
+    const u = new URL('https://www.googleapis.com/youtube/v3/' + path);
+    for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
+    u.searchParams.set('key', this.cfg.ytKey);
+    const r = await fetch(u.toString());
+    this.addYtUnits(units);
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const reason = j.error && j.error.errors && j.error.errors[0] && j.error.errors[0].reason;
+      if (reason === 'quotaExceeded') throw new Error("You've used today's free YouTube searches. They reset at midnight Pacific time.");
+      throw new Error('YouTube said: ' + ((j.error && j.error.message) || r.status));
+    }
+    return j;
+  }
+  async youtube(q) {
+    if (!this.cfg.ytKey) return { needKey: true };
+    const days = ({ '1d': 1, '7d': 7, '30d': 30 })[q.get('range')] || 7;
+    const scope = q.get('scope') === 'search' ? 'search' : 'streamers';
+    const text = String(q.get('q') || '').trim().slice(0, 80);
+    const queries = scope === 'search' ? (text ? [{ q: text, who: text }] : []) : this.cfg.streamers.slice(0, 10).map((s) => ({ q: s.name, who: s.name }));
+    if (!queries.length) return { videos: [], note: scope === 'search' ? 'Type something to search for.' : 'Add streamers on the Auto clips tab first.' };
+    const key = `${scope}|${days}|${queries.map((x) => x.q.toLowerCase()).join(',')}`;
+    const hit = this.ytCache.get(key);
+    if (hit && this.now() - hit.at < 6 * 3600 * 1000) return { ...hit.data, cached: true, usage: this.ytUsage };
+    const after = new Date(this.now() - days * 86400000).toISOString();
+    const found = new Map();
+    for (const x of queries) {
+      const j = await this.yt('search', { part: 'snippet', q: x.q, type: 'video', videoDuration: 'short', order: 'viewCount', publishedAfter: after, maxResults: '25', safeSearch: 'none' }, 100);
+      for (const it of j.items || []) if (it.id && it.id.videoId && !found.has(it.id.videoId)) found.set(it.id.videoId, { id: it.id.videoId, about: x.who });
+    }
+    const ids = [...found.keys()], videos = [];
+    for (let i = 0; i < ids.length; i += 50) {
+      const j = await this.yt('videos', { part: 'snippet,statistics,contentDetails', id: ids.slice(i, i + 50).join(',') }, 1);
+      for (const v of j.items || []) {
+        const m = /PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/.exec(v.contentDetails && v.contentDetails.duration || '') || [];
+        const secs = (+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + (+m[3] || 0);
+        if (secs === 0 || secs > 180) continue; // Shorts are 3 minutes or less
+        const st = v.statistics || {}, sn = v.snippet || {};
+        const hours = Math.max(0.5, (this.now() - Date.parse(sn.publishedAt)) / 3600000);
+        const views = +st.viewCount || 0;
+        videos.push({ id: v.id, url: `https://www.youtube.com/shorts/${v.id}`, title: sn.title || '', channel: sn.channelTitle || '', channelId: sn.channelId || '', about: found.get(v.id).about,
+          published: sn.publishedAt, secs, views, likes: +st.likeCount || 0, comments: +st.commentCount || 0, perHour: Math.round(views / hours),
+          thumb: (sn.thumbnails && (sn.thumbnails.high || sn.thumbnails.medium || sn.thumbnails.default) || {}).url || '' });
+      }
+    }
+    const data = { videos, at: this.now() };
+    this.ytCache.set(key, { at: this.now(), data });
+    if (this.ytCache.size > 20) this.ytCache.delete(this.ytCache.keys().next().value);
+    return { ...data, usage: this.ytUsage };
   }
 
   async download(id) {

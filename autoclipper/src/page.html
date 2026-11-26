@@ -84,7 +84,7 @@ input[type=text],select{background:var(--panel2);border:1px solid var(--line);bo
 .log li:first-child{border-top:0}
 .log time{color:var(--mute);font-variant-numeric:tabular-nums;font-size:12.5px}
 .empty{color:var(--mute);text-align:center;padding:14px 6px;font-size:14px}
-.tabs{display:grid;grid-template-columns:1fr 1fr;background:var(--panel2);border-radius:12px;padding:3px;gap:3px;margin-top:14px}
+.tabs{display:grid;grid-template-columns:1fr 1fr 1fr;background:var(--panel2);border-radius:12px;padding:3px;gap:3px;margin-top:14px}
 .tabs button{border:0;background:none;border-radius:10px;padding:10px;min-height:44px;color:var(--mute);font-weight:600;cursor:pointer}
 .tabs button.on{background:#3a3e47;color:var(--ink)}
 .tr{display:grid;grid-template-columns:132px minmax(0,1fr);gap:12px;padding:12px 0;border-top:1px solid var(--line)}
@@ -116,6 +116,12 @@ details ol{margin-top:6px}
 .style button.on{background:#3a3e47;color:var(--ink)}
 .edtag{font-size:10.5px;font-weight:800;letter-spacing:.03em;padding:2px 6px;border-radius:4px;background:rgba(61,220,132,.16);color:var(--ok)}
 .edcheck{background:none;border:0;color:#7cc4ff;font-size:12px;padding:4px 0;cursor:pointer;min-height:28px}
+.ytc{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:8px;align-items:center;padding:7px 0;border-top:1px solid var(--line);font-size:14px}
+.ytc:first-child{border-top:0}
+.ytc .n{color:var(--mute);font-weight:700;text-align:center}
+.ytc small{color:var(--mute);font-size:12.5px;display:block}
+.ytc .v{font-weight:700;font-variant-numeric:tabular-nums}
+.boom{font-size:10.5px;font-weight:800;padding:2px 6px;border-radius:4px;background:rgba(255,79,94,.18);color:#ff8a93;margin-left:4px;letter-spacing:.03em}
 #toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#2b2f37;border:1px solid var(--line);padding:10px 16px;border-radius:12px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s;width:max-content;max-width:90vw;z-index:9}
 #toast.show{opacity:1}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -165,7 +171,41 @@ details ol{margin-top:6px}
   </section>
 
   <div id="vMain" hidden>
-    <div class="tabs" id="tabs"><button data-t="auto" class="on">Auto clips</button><button data-t="trend">Trending</button></div>
+    <div class="tabs" id="tabs"><button data-t="auto" class="on">Auto clips</button><button data-t="trend">Trending</button><button data-t="yt">YouTube</button></div>
+    <div id="tYT" hidden>
+      <section class="card" id="ytSetup" hidden>
+        <h2>See what clippers post on YouTube</h2>
+        <p class="mute small">Shows the Shorts people are posting about your streamers: how many views they get, how fast, and which clipper channels are winning. It needs a free YouTube API key from Google (about 5 minutes).</p>
+        <ol class="small">
+          <li>Open <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">console.cloud.google.com</a>, sign in, and create a project (any name).</li>
+          <li>Open <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noopener">YouTube Data API v3</a> and tap <b>Enable</b>.</li>
+          <li>Go to <b>APIs &amp; Services → Credentials → Create credentials → API key</b>, and copy it.</li>
+          <li>Optional but smart: tap the key, set <b>API restrictions</b> to YouTube Data API v3, and save.</li>
+        </ol>
+        <div class="row"><input type="text" id="ytKeyIn" placeholder="AIza…" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn primary" id="ytKeySave">Save</button></div>
+        <div class="err" id="ytErr"></div>
+      </section>
+      <div id="ytMain" hidden>
+        <section class="card">
+          <div class="seg" id="ytScope" style="grid-template-columns:1fr 1fr"><button data-v="streamers" class="on">My streamers</button><button data-v="search">Search</button></div>
+          <div class="row" id="ytQRow" style="margin-top:10px" hidden><input type="text" id="ytQ" placeholder="Anything, like Joe Bart or Valorant clips" autocomplete="off"><button class="btn primary" id="ytGo">Search</button></div>
+          <div class="grid2">
+            <label>Posted in the last<select id="ytRange"><option value="1d">24 hours</option><option value="7d" selected>7 days</option><option value="30d">30 days</option></select></label>
+            <label>Sort by<select id="ytSort"><option value="hot">Hot right now</option><option value="views">Most views</option><option value="likes">Most liked</option></select></label>
+          </div>
+          <p class="mute small" style="margin-top:10px" id="ytQuota"></p>
+        </section>
+        <section class="card" id="ytTopCard" hidden>
+          <h2>Clipper channels winning right now</h2>
+          <div id="ytTop"></div>
+        </section>
+        <section class="card">
+          <h2>Shorts <span class="n" id="ytCount"></span><button class="btn mini" id="ytRefresh" style="margin-left:auto">Refresh</button></h2>
+          <div id="ytList"><div class="empty">Loading…</div></div>
+          <button class="btn wide" id="ytForget" style="margin-top:12px">Remove YouTube key</button>
+        </section>
+      </div>
+    </div>
     <div id="tTrend" hidden>
       <section class="card">
         <div class="seg" id="tScope" style="grid-template-columns:1fr 1fr"><button data-v="streamers" class="on">My streamers</button><button data-v="game">A game</button></div>
@@ -417,8 +457,9 @@ const vodTime = (s) => { s = Math.max(0, Math.floor(s)); const h = Math.floor(s 
 $('#tabs').onclick = (e) => {
   const b = e.target.closest('button'); if (!b) return; tab = b.dataset.t;
   for (const x of $('#tabs').children) x.classList.toggle('on', x === b);
-  $('#tTrend').hidden = tab !== 'trend'; $('#tAuto').hidden = tab !== 'auto';
+  $('#tTrend').hidden = tab !== 'trend'; $('#tAuto').hidden = tab !== 'auto'; $('#tYT').hidden = tab !== 'yt';
   if (tab === 'trend' && !tData) loadTrend();
+  if (tab === 'yt') ytOpen();
 };
 $('#tScope').onclick = (e) => {
   const b = e.target.closest('button'); if (!b) return; tScope = b.dataset.v;
@@ -559,6 +600,61 @@ $('#digestNow').onclick = async () => {
   catch (e) { toast(e.message); }
   finally { b.disabled = false; b.textContent = 'Send picks now'; }
 };
+
+/* ---------- YouTube tab ---------- */
+let ytData = null, ytScope = 'streamers';
+function ytOpen() {
+  const has = S && S.cfg.yt;
+  $('#ytSetup').hidden = !!has; $('#ytMain').hidden = !has;
+  if (has && !ytData) ytLoad();
+}
+$('#ytKeySave').onclick = async () => {
+  $('#ytErr').textContent = ''; const b = $('#ytKeySave'); b.disabled = true; b.textContent = 'Checking…';
+  try { await api('/api/youtube/key', { key: $('#ytKeyIn').value }); $('#ytKeyIn').value = ''; await refresh(); ytOpen(); toast('YouTube connected.'); }
+  catch (e) { $('#ytErr').textContent = e.message; }
+  finally { b.disabled = false; b.textContent = 'Save'; }
+};
+$('#ytForget').onclick = async () => { try { await api('/api/youtube/key', { key: '' }); ytData = null; await refresh(); ytOpen(); } catch (e) { toast(e.message); } };
+$('#ytScope').onclick = (e) => {
+  const b = e.target.closest('button'); if (!b) return; ytScope = b.dataset.v;
+  for (const x of $('#ytScope').children) x.classList.toggle('on', x === b);
+  $('#ytQRow').hidden = ytScope !== 'search';
+  if (ytScope === 'streamers') ytLoad(); else { ytData = null; $('#ytList').innerHTML = '<div class="empty">Type a search and tap Search.</div>'; $('#ytTopCard').hidden = true; $('#ytQ').focus(); }
+};
+$('#ytGo').onclick = () => ytLoad();
+$('#ytQ').addEventListener('keydown', (e) => { if (e.key === 'Enter') ytLoad(); });
+$('#ytRange').onchange = () => ytLoad();
+$('#ytSort').onchange = () => ytRender();
+$('#ytRefresh').onclick = () => ytLoad();
+async function ytLoad() {
+  if (ytScope === 'search' && !$('#ytQ').value.trim()) return;
+  $('#ytList').innerHTML = '<div class="empty">Searching YouTube…</div>';
+  try {
+    const qs = new URLSearchParams({ scope: ytScope, range: $('#ytRange').value, q: $('#ytQ').value.trim() });
+    const r = await fetch('/api/youtube?' + qs, { headers: { 'x-clipkit-key': key } }); const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Could not load YouTube.');
+    if (j.needKey) { ytOpen(); return; }
+    ytData = j; ytRender();
+  } catch (e) { $('#ytList').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+function ytRender() {
+  if (!ytData) return;
+  const u = ytData.usage;
+  $('#ytQuota').textContent = (u ? `Used ${u.units.toLocaleString()} of 10,000 free YouTube units today. ` : '') + 'Each streamer search uses 100, and results are saved for 6 hours so refreshing is free.' + (ytData.cached ? ' (Showing saved results.)' : '');
+  const sort = $('#ytSort').value, list = ytData.videos.filter((v) => !hidden.has('yt' + v.id))
+    .sort((a, b) => sort === 'views' ? b.views - a.views : sort === 'likes' ? b.likes - a.likes : b.perHour - a.perHour);
+  $('#ytCount').textContent = list.length ? String(list.length) : '';
+  const rates = list.map((v) => v.perHour).sort((a, b) => a - b), med = rates.length ? rates[rates.length >> 1] : 0;
+  // which clipper channels are winning
+  const ch = {};
+  for (const v of ytData.videos) { const c = ch[v.channelId] = ch[v.channelId] || { name: v.channel, id: v.channelId, n: 0, views: 0, best: 0 }; c.n++; c.views += v.views; c.best = Math.max(c.best, v.views); }
+  const top = Object.values(ch).sort((a, b) => b.views - a.views).slice(0, 6);
+  $('#ytTopCard').hidden = !top.length;
+  $('#ytTop').innerHTML = top.map((c, i) => `<div class="ytc"><span class="n">${i + 1}</span><span><a href="https://www.youtube.com/channel/${esc(c.id)}/shorts" target="_blank" rel="noopener">${esc(c.name)}</a><small>${c.n} Short${c.n === 1 ? '' : 's'} · best ${num(c.best)} views</small></span><span class="v">${num(c.views)}</span></div>`).join('');
+  if (!list.length) { $('#ytList').innerHTML = `<div class="empty">${esc(ytData.note || 'No Shorts found in this time range.')}</div>`; return; }
+  $('#ytList').innerHTML = list.slice(0, 60).map((v) => `<div class="tr"><div class="thumb" style="background-image:url('${esc(v.thumb)}')"><span>${v.secs}s</span></div><div><b>${esc(v.title)}</b><small>${esc(v.channel)}${ytScope === 'streamers' ? ' · about ' + esc(v.about) : ''}</small><small><span class="hot">${num(v.perHour)}/hour</span>${med && v.perHour >= med * 3 && v.perHour >= 500 ? '<span class="boom">BLOWING UP</span>' : ''} · ${num(v.views)} views · ${num(v.likes)} likes · ${ago(Date.parse(v.published))}</small><div class="acts"><a class="btn mini" href="${esc(v.url)}" target="_blank" rel="noopener">Watch</a><button class="btn mini" data-ythide="${esc(v.id)}">Hide</button></div></div></div>`).join('');
+}
+$('#ytList').onclick = (e) => { const b = e.target.closest('[data-ythide]'); if (!b) return; hidden.add('yt' + b.dataset.ythide); saveHidden(); ytRender(); };
 
 function loop() { clearTimeout(pollT); if (!document.hidden) refresh(); pollT = setTimeout(loop, 5000); }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) loop(); });
