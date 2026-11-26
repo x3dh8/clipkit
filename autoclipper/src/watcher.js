@@ -789,7 +789,7 @@ export class Watcher {
     if (buf.byteLength > 25 * 1024 * 1024) throw new Error('Audio piece too big.');
     const bytes = new Uint8Array(buf); let bin = '';
     for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-    const opts = { audio: btoa(bin), vad_filter: true, condition_on_previous_text: false };
+    const opts = { audio: btoa(bin), vad_filter: true, condition_on_previous_text: false, initial_prompt: "Umm, like, I'm gonna keep it real, bro. Nah, he's wildin'." };
     if (lang && /^[a-z]{2}$/.test(lang)) opts.language = lang;
     const r = await this.ai().run('@cf/openai/whisper-large-v3-turbo', opts);
     const segs = (r.segments || []).map((s) => ({ start: +s.start || 0, end: +s.end || 0, text: String(s.text || '').trim(),

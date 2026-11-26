@@ -588,7 +588,8 @@ function draw() {
 function activeGroupIndex(t, G = S.groups) {
   for (let i = 0; i < G.length; i++) {
     const g = G[i], nx = G[i + 1];
-    const end = nx ? Math.min(nx.start, g.end + 0.4) : g.end + 0.4;
+    // short pauses keep the line up so captions don't blink off and on
+    const end = nx ? (nx.start - g.end < 1 ? nx.start : g.end + 0.4) : g.end + 0.4;
     if (t >= g.start && t < Math.max(end, g.start + 0.15)) return i;
   }
   return -1;
@@ -599,7 +600,7 @@ function drawCapsOn(ctx, groups, t) {
   const g = groups[gi], c = S.cap, size = c.size, f = FONTS[c.font] || FONTS.Montserrat;
   ctx.font = `${f.w} ${size}px ${f.css}`;
   ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.lineJoin = 'round';
-  const words = g.words.map((w) => ({ ...w, txt: c.upper ? w.t.toUpperCase() : w.t }));
+  const words = g.words.map((w) => { const t = w.t.replace(/[.,;:]+$/, '') || w.t; return { ...w, txt: c.upper ? t.toUpperCase() : t }; });
   const space = ctx.measureText(' ').width, maxW = OW * 0.86;
   let ai = -1; words.forEach((w, i) => { if (t >= w.s) ai = i; });
   const POP = 1.12, act = (w) => words.indexOf(w) === ai && c.hi !== '#ffffff';
@@ -797,8 +798,15 @@ function buildGroups(words) {
   const G = []; let cur = null;
   for (const w of words) {
     const last = cur && cur.words[cur.words.length - 1];
-    if (!cur || cur.words.length >= S.cap.per || w.s - cur.end > 0.6 || /[.!?,;:]$/.test(last.t)) { cur = { words: [], start: w.s, end: w.e }; G.push(cur); }
+    if (!cur || cur.words.length >= S.cap.per || w.s - cur.end > 0.6 || /[.!?]$/.test(last.t)) { cur = { words: [], start: w.s, end: w.e }; G.push(cur); }
     cur.words.push(w); cur.end = Math.max(cur.end, w.e);
+  }
+  // a lone word right after a line joins that line instead of flashing by itself
+  for (let i = G.length - 1; i > 0; i--) {
+    const g = G[i], pv = G[i - 1];
+    if (g.words.length === 1 && g.start - pv.end < 0.35 && pv.words.length <= S.cap.per && !/[.!?]$/.test(pv.words[pv.words.length - 1].t)) {
+      pv.words.push(...g.words); pv.end = Math.max(pv.end, g.end); G.splice(i, 1);
+    }
   }
   return G;
 }
