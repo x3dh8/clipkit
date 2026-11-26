@@ -30,6 +30,12 @@ const BOTS = new Set(['nightbot', 'streamelements', 'moobot', 'fossabot', 'strea
 const QUIET = { raid: 90, unraid: 30, sub_gift: 20, community_sub_gift: 45, gift_paid_upgrade: 15, prime_paid_upgrade: 10, pay_it_forward: 15, sub: 8, resub: 8, bits_badge_tier: 15, charity_donation: 20, announcement: 20, watch_streak: 5 };
 
 const defaultCfg = () => ({ clientId: '', enabled: true, streamers: [], sensitivity: 'normal', clipLen: 30, maxPerStream: 5, cooldown: 120, discord: '', alerts: true, digestOn: false, digestHour: 8, tz: 'America/Denver', ytKey: '', postsHook: '', queueOn: false, queueHour: 13, queueCount: 8 });
+// YouTube rules the daily queue checks against (games/labels from Twitch)
+const SKIP_GAMES = { 'slots': 'gambling', 'virtual casino': 'gambling', 'casino': 'gambling', 'music': 'copyrighted music', 'djs': 'copyrighted music' };
+const SKIP_LABELS = { Gambling: 'gambling', SexualThemes: 'sexual themes' };
+const WARN_LABELS = { ViolentGraphic: 'graphic violence, so it may get age-restricted', DrugsIntoxication: 'drugs or drinking, so it may get age-restricted or limited ads', ProfanityVulgarity: 'heavy swearing, so it may get limited ads' };
+const GUARD_BAD = ['S3', 'S4', 'S5', 'S10', 'S11', 'S12']; // sex crimes, child safety, defamation, hate, self-harm, sexual
+const BAD_WORDS = /\b(stake\.com|stake\s*code|roobet|rollbit|gamdom|csgoempire|bet365|draftkings|fanduel|onlyfans|promo\s*code|use\s*code)\b/i;
 const WEBHOOK_RE = /^https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[\w-]+$/;
 
 function json(data, status = 200) {
@@ -895,35 +901,82 @@ export class Watcher {
   async writeCopy(items) {
     if (!this.env || !this.env.AI) return null;
     const list = items.map((it, i) => `${i + 1}. Streamer: ${it.name}${it.game ? ' (playing ' + it.game + ')' : ''}. Clip title: "${it.title}". Why it's good: ${it.why}.${it.chat ? ' Chat was spamming: ' + it.chat + '.' : ''}`).join('\n');
-    const sys = 'You write titles and descriptions for YouTube Shorts made from Twitch stream clips. Titles: under 70 characters, a curiosity hook that makes people want to watch, names the streamer, sounds like a person wrote it, no emojis, no ALL CAPS words except a streamer name, and NEVER invent details that are not in the information given (if the info is thin, keep the title general and honest). Description: one or two short sentences plus a credit line. Hashtags: 3 to 5, always including #shorts and the streamer.';
+    const sys = 'You write titles and descriptions for YouTube Shorts made from Twitch stream clips. They must follow YouTube\'s rules. Titles: under 70 characters, a curiosity hook that makes people want to watch, names the streamer, sounds like a person wrote it, no emojis, no ALL CAPS words except a streamer name. NEVER invent details that are not in the information given, and never promise something the clip may not show (no fake drama, no "gone wrong", no "banned", no "you won\'t believe"); if the info is thin, keep the title general and honest. Never insult, mock or sexualize anyone, never use slurs, and never name or hint at gambling or betting sites, promo codes or sponsors. Description: one or two short sentences, no links. Hashtags: 3 to 5, each directly about this clip (the streamer, the game, the kind of moment), always including #shorts; never trending tags that are unrelated. Angle: one short idea for the creator\'s OWN commentary to add on top (a caption or voiceover line that explains, reacts to or gives context to the moment), without inventing what happens.';
     const user = `Write copy for each clip. Give 3 different title options per clip.\n\n${list}`;
-    const schema = { type: 'object', properties: { clips: { type: 'array', items: { type: 'object', properties: { n: { type: 'integer' }, titles: { type: 'array', items: { type: 'string' } }, description: { type: 'string' }, hashtags: { type: 'array', items: { type: 'string' } } }, required: ['n', 'titles', 'description', 'hashtags'] } } }, required: ['clips'] };
+    const schema = { type: 'object', properties: { clips: { type: 'array', items: { type: 'object', properties: { n: { type: 'integer' }, titles: { type: 'array', items: { type: 'string' } }, description: { type: 'string' }, hashtags: { type: 'array', items: { type: 'string' } }, angle: { type: 'string' } }, required: ['n', 'titles', 'description', 'hashtags', 'angle'] } } }, required: ['clips'] };
     try {
       const r = await this.env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', { messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], response_format: { type: 'json_schema', json_schema: schema }, max_tokens: 2000, temperature: 0.6 });
       const out = typeof r.response === 'string' ? JSON.parse(r.response) : r.response;
       return out && Array.isArray(out.clips) ? out.clips : null;
     } catch (e) { return null; }
   }
+  // Llama Guard: true = looks fine, false = break a YouTube rule, null = couldn't check
+  async guard(text) {
+    if (!this.env || !this.env.AI || !text) return null;
+    try {
+      const r = await this.env.AI.run('@cf/meta/llama-guard-3-8b', { messages: [{ role: 'user', content: String(text).slice(0, 1500) }] });
+      const out = r && r.response !== undefined ? r.response : r;
+      if (out && typeof out === 'object') return out.safe !== false || !(out.categories || []).some((c) => GUARD_BAD.includes(String(c).toUpperCase()));
+      const t = String(out || '');
+      if (!/unsafe/i.test(t)) return true;
+      return !(t.toUpperCase().match(/S\d+/g) || []).some((c) => GUARD_BAD.includes(c));
+    } catch (e) { return null; }
+  }
+  // Twitch info the YouTube checks need: channel labels and game names
+  async policyMeta(bids, gids) {
+    const chans = {}, games = {};
+    bids = [...new Set(bids.filter(Boolean))]; gids = [...new Set(gids.filter(Boolean))];
+    for (let i = 0; i < bids.length; i += 100) { try { for (const c of (await this.helix('/channels', { query: { broadcaster_id: bids.slice(i, i + 100) } })).data || []) chans[c.broadcaster_id] = c; } catch (e) {} }
+    for (let i = 0; i < gids.length; i += 100) { try { for (const g of (await this.helix('/games', { query: { id: gids.slice(i, i + 100) } })).data || []) games[g.id] = g.name; } catch (e) {} }
+    return { chans, games };
+  }
+  // Why a clip can't go on YouTube ('' = fine)
+  skipWhy(meta, { bid, game, title }) {
+    const labels = ((meta.chans[bid] || {}).content_classification_labels) || [];
+    return SKIP_GAMES[String(game || '').toLowerCase()] || labels.map((l) => SKIP_LABELS[l]).find(Boolean) || (BAD_WORDS.test(title || '') ? 'gambling or promo codes' : '');
+  }
+  warnings(meta, bid) {
+    const ch = meta.chans[bid] || {}, w = (ch.content_classification_labels || []).map((l) => WARN_LABELS[l]).filter(Boolean);
+    if (ch.is_branded_content) w.push('a sponsor, so cut any sponsor logos, links or codes');
+    return w;
+  }
   async makeQueue() {
-    const n = this.cfg.queueCount || 8, since = this.now() - 26 * 3600 * 1000, items = [];
+    const n = this.cfg.queueCount || 8, since = this.now() - 26 * 3600 * 1000, items = [], skipped = [];
     const editor = new Set(this.cfg.streamers.filter((s) => s.editor === true).map((s) => s.id));
-    // 1) your own auto clips from the last day
-    for (const c of this.clips.filter((x) => x.status === 'ready' && x.at >= since).slice(0, 20)) {
-      items.push({ kind: 'mine', id: c.id, name: c.name, login: c.login, title: c.title || 'stream moment', why: c.why, chat: (c.top || []).join(', '), game: c.game || '', url: c.url, thumb: c.thumb, score: 70 + (c.manual ? 5 : 0), ready: editor.has(c.broadcaster_id) });
-    }
-    // 2) the best moments other viewers clipped
     const started = new Date(this.now() - 72 * 3600 * 1000).toISOString();
-    const lists = await Promise.all(this.cfg.streamers.map((s) => this.helix('/clips', { query: { broadcaster_id: s.id, started_at: started, first: '100' } }).then((j) => j.data || []).catch(() => [])));
-    const picks = bestMoments(lists.flat(), this.now(), (c) => Date.parse(c.created_at) >= since, n);
-    const loginOf = (id) => (this.cfg.streamers.find((s) => s.id === id) || {}).login || '';
-    for (const m of picks) {
-      const c = m.best, off = c.vod_offset;
-      items.push({ kind: 'pick', id: c.id, name: c.broadcaster_name, login: loginOf(c.broadcaster_id), title: c.title, why: m.why.join(', ') || `${numFmt(m.views)} views`, chat: '', game: '', url: c.url, thumb: c.thumbnail_url, score: m.score,
-        vod: c.video_id && off != null ? `https://www.twitch.tv/videos/${c.video_id}?t=${Math.floor(off / 3600)}h${Math.floor(off % 3600 / 60)}m${Math.floor(off % 60)}s` : '', ready: false, editor: editor.has(c.broadcaster_id) });
+    const raw = (await Promise.all(this.cfg.streamers.map((s) => this.helix('/clips', { query: { broadcaster_id: s.id, started_at: started, first: '100' } }).then((j) => j.data || []).catch(() => [])))).flat();
+    const mine = this.clips.filter((x) => x.status === 'ready' && x.at >= since).slice(0, 20);
+    const meta = await this.policyMeta([...this.cfg.streamers.map((s) => s.id), ...mine.map((c) => c.broadcaster_id)], raw.map((c) => c.game_id));
+    // 1) your own auto clips from the last day
+    for (const c of mine) {
+      const why = this.skipWhy(meta, { bid: c.broadcaster_id, game: c.game, title: c.title });
+      if (why) { skipped.push(why); continue; }
+      items.push({ kind: 'mine', id: c.id, name: c.name, login: c.login, title: c.title || 'stream moment', why: c.why, chat: (c.top || []).join(', '), game: c.game || '', bid: c.broadcaster_id, url: c.url, thumb: c.thumb, score: 70 + (c.manual ? 5 : 0), ready: editor.has(c.broadcaster_id) });
     }
+    // 2) the best moments other viewers clipped (rule-breaking clips never count)
+    const bad = new Set();
+    for (const c of raw) { const why = this.skipWhy(meta, { bid: c.broadcaster_id, game: meta.games[c.game_id], title: c.title }); if (why) { bad.add(c.id); if (Date.parse(c.created_at) >= since) skipped.push(why); } }
+    const loginOf = (id) => (this.cfg.streamers.find((s) => s.id === id) || {}).login || '';
+    const toItem = (m) => { const c = m.best, off = c.vod_offset; return { kind: 'pick', id: c.id, name: c.broadcaster_name, login: loginOf(c.broadcaster_id), title: c.title, why: m.why.join(', ') || `${numFmt(m.views)} views`, chat: '', game: meta.games[c.game_id] || '', bid: c.broadcaster_id, url: c.url, thumb: c.thumbnail_url, score: m.score,
+      vod: c.video_id && off != null ? `https://www.twitch.tv/videos/${c.video_id}?t=${Math.floor(off / 3600)}h${Math.floor(off % 3600 / 60)}m${Math.floor(off % 60)}s` : '', ready: false, editor: editor.has(c.broadcaster_id) }; };
+    const checked = new Map(); // clip id -> guard verdict on its title
+    const guardItems = async (list) => { await Promise.all(list.filter((it) => !checked.has(it.id)).map(async (it) => checked.set(it.id, await this.guard(`Twitch clip title: ${it.title}`)))); };
+    await guardItems(items);
+    for (let round = 0; round < 3; round++) {
+      const picks = bestMoments(raw.filter((c) => !bad.has(c.id)), this.now(), (c) => Date.parse(c.created_at) >= since, n).map(toItem);
+      await guardItems(picks);
+      const flagged = picks.filter((it) => checked.get(it.id) === false);
+      if (!flagged.length || round === 2) { items.push(...picks.filter((it) => checked.get(it.id) !== false)); break; }
+      for (const it of flagged) bad.add(it.id);
+    }
+    const kept = items.filter((it) => checked.get(it.id) !== false);
+    for (const it of items) if (checked.get(it.id) === false && it.kind === 'mine') skipped.push('the clip title breaks YouTube rules');
+    skipped.push(...[...bad].filter((id) => checked.get(id) === false).map(() => 'the clip title breaks YouTube rules'));
+    const skipNote = skipped.length ? `Skipped ${skipped.length} clip${skipped.length > 1 ? 's' : ''} for YouTube rules (${[...new Set(skipped)].join(', ')}).` : '';
+    if (skipNote) this.addLog('Queue ' + skipNote.charAt(0).toLowerCase() + skipNote.slice(1));
     // best first, no more than 3 from one streamer
     const per = {}, chosen = [];
-    for (const it of items.sort((a, b) => b.score - a.score)) { if ((per[it.name] = (per[it.name] || 0) + 1) > 3) continue; chosen.push(it); if (chosen.length >= n) break; }
+    for (const it of kept.sort((a, b) => b.score - a.score)) { if ((per[it.name] = (per[it.name] || 0) + 1) > 3) continue; it.warn = this.warnings(meta, it.bid); chosen.push(it); if (chosen.length >= n) break; }
     if (!chosen.length) {
       await this.discord({ username: 'ClipKit Queue', content: "**🎬 Today's video queue:** nothing strong enough today. Quiet streams. Check back tomorrow." }, this.cfg.postsHook);
       this.queue = { at: this.now(), items: [] }; await this.st.put('queue', this.queue);
@@ -931,13 +984,20 @@ export class Watcher {
     }
     const copy = await this.writeCopy(chosen);
     const times = this.slotTimes(chosen.length);
+    const clean = (t) => String(t || '').replace(BAD_WORDS, '').replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim();
     chosen.forEach((it, i) => {
       const w = copy && copy.find((x) => +x.n === i + 1);
-      it.titles = w && w.titles && w.titles.length ? w.titles.slice(0, 3).map((t) => String(t).slice(0, 100)) : [it.title];
-      it.description = (w && w.description ? String(w.description).slice(0, 400) : `${it.name} on stream.`) + (it.login ? `\nFull stream: twitch.tv/${it.login}` : '');
-      it.hashtags = w && Array.isArray(w.hashtags) && w.hashtags.length ? w.hashtags.slice(0, 5).map((t) => '#' + String(t).replace(/^#/, '').replace(/\s+/g, '')) : ['#shorts', '#' + (it.login || 'twitch')];
+      const titles = w && Array.isArray(w.titles) ? w.titles.map((t) => clean(t).slice(0, 100)).filter((t) => t.length >= 8) : [];
+      it.titles = titles.length ? [...new Set(titles)].slice(0, 3) : [clean(it.title).slice(0, 100) || `${it.name} stream moment`];
+      it.description = (w && w.description ? clean(w.description).slice(0, 400) : `${it.name} on stream.`) + `\nClip from ${it.name}'s stream${it.login ? `: twitch.tv/${it.login}` : ''}. All credit to ${it.name}.`;
+      const tags = (w && Array.isArray(w.hashtags) ? w.hashtags : []).map((t) => '#' + String(t).replace(/[^\p{L}\p{N}_]/gu, '')).filter((t) => t.length > 2 && !BAD_WORDS.test(t) && !/^#(fyp|foryou|foryoupage|viral|trending|explore|xyzbca|blowup)$/i.test(t));
+      it.hashtags = [...new Set(['#shorts', ...tags.map((t) => t.toLowerCase() === '#shorts' ? '#shorts' : t), ...(it.login ? ['#' + it.login] : [])])].slice(0, 5);
+      it.angle = w && w.angle ? clean(w.angle).slice(0, 200) : '';
       it.postAt = times[i];
     });
+    // last check on what the AI wrote; anything flagged goes back to a plain title
+    const vs = await Promise.all(chosen.map((it) => this.guard(`${it.titles.join('\n')}\n${it.description}\n${it.hashtags.join(' ')}\n${it.angle}`)));
+    chosen.forEach((it, i) => { if (vs[i] === false) { it.titles = [`${it.name} stream moment`]; it.description = `Clip from ${it.name}'s stream${it.login ? `: twitch.tv/${it.login}` : ''}. All credit to ${it.name}.`; it.hashtags = ['#shorts', ...(it.login ? ['#' + it.login] : [])]; it.angle = ''; } });
     this.queue = { at: this.now(), items: chosen }; await this.st.put('queue', this.queue);
     const how = (it) => it.ready ? '📥 **Ready:** pull it into ClipKit Batch with *Get clips from my auto clipper*.'
       : it.kind === 'mine' ? '📥 Download it from your Clips Manager (Clips I\'ve created), then add it in ClipKit Batch.'
@@ -947,12 +1007,14 @@ export class Watcher {
       title: `${i + 1}. ${it.titles[0]}`.slice(0, 250), url: it.url, color: 0xff4f5e,
       description: [`**Post at ${it.postAt}** · ${it.name} · ${it.why}`,
         it.titles.length > 1 ? `**Other titles:**\n${it.titles.slice(1).map((t) => '• ' + t).join('\n')}` : '',
-        `**Description:**\n${it.description}\n${it.hashtags.join(' ')}`, how(it)].filter(Boolean).join('\n\n').slice(0, 1500),
+        `**Description:**\n${it.description}\n${it.hashtags.join(' ')}`,
+        it.angle ? `🎙️ **Add your take:** ${it.angle}` : '',
+        it.warn && it.warn.length ? `⚠️ **Heads up:** this channel is marked for ${it.warn.join('; ')}.` : '', how(it)].filter(Boolean).join('\n\n').slice(0, 1500),
       thumbnail: it.thumb ? { url: it.thumb } : undefined
     }));
     const { day } = this.localNow();
     for (let i = 0; i < embeds.length; i += 4) {
-      await this.discord({ username: 'ClipKit Queue', content: i === 0 ? `**🎬 Today's video queue (${day})**: ${chosen.length} videos, best first. Watch each one, cut the weak ones, and add your own take in the title. Post times are suggestions.` : undefined, embeds: embeds.slice(i, i + 4) }, this.cfg.postsHook);
+      await this.discord({ username: 'ClipKit Queue', content: i === 0 ? `**🎬 Today's video queue (${day})**: ${chosen.length} videos, best first. Post times are suggestions.\n**Before each post (YouTube rules):**\n• Watch the whole clip. Skip it if there's nudity, slurs, real violence or a gambling site on screen.\n• Add your own take (caption, voiceover or edit). Plain reposts can't earn money on YouTube.\n• Cut or mute any copyrighted music.\n• Only post streamers who allow clip channels, and keep the credit line.${skipNote ? `\n_${skipNote}_` : ''}` : undefined, embeds: embeds.slice(i, i + 4) }, this.cfg.postsHook);
     }
     this.addLog(`Sent today's video queue (${chosen.length} videos) to Discord.`);
     return { ok: true, count: chosen.length };
