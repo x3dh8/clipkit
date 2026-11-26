@@ -29,7 +29,7 @@ const BOTS = new Set(['nightbot', 'streamelements', 'moobot', 'fossabot', 'strea
 // How long to ignore chat after events that make chat explode for reasons other than gameplay
 const QUIET = { raid: 90, unraid: 30, sub_gift: 20, community_sub_gift: 45, gift_paid_upgrade: 15, prime_paid_upgrade: 10, pay_it_forward: 15, sub: 8, resub: 8, bits_badge_tier: 15, charity_donation: 20, announcement: 20, watch_streak: 5 };
 
-const defaultCfg = () => ({ clientId: '', enabled: true, streamers: [], sensitivity: 'normal', clipLen: 30, maxPerStream: 5, cooldown: 120, discord: '', alerts: true, digestOn: false, digestHour: 8, tz: 'America/Denver', ytKey: '' });
+const defaultCfg = () => ({ clientId: '', enabled: true, streamers: [], sensitivity: 'normal', clipLen: 30, maxPerStream: 5, cooldown: 120, discord: '', alerts: true, digestOn: false, digestHour: 8, tz: 'America/Denver', ytKey: '', postsHook: '', queueOn: false, queueHour: 13, queueCount: 8 });
 const WEBHOOK_RE = /^https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[\w-]+$/;
 
 function json(data, status = 200) {
@@ -146,6 +146,8 @@ export class Watcher {
     this.key = (await this.st.get('key')) || null;
     this.lastDigest = (await this.st.get('lastDigest')) || '';
     this.ytUsage = (await this.st.get('ytUsage')) || { day: '', units: 0 };
+    this.lastQueue = (await this.st.get('lastQueue')) || '';
+    this.queue = (await this.st.get('queue')) || null;
   }
 
   now() { return Date.now(); }
@@ -212,6 +214,14 @@ export class Watcher {
           c.discord = w;
         }
         if (typeof body.alerts === 'boolean') c.alerts = body.alerts;
+        if (typeof body.postsHook === 'string') {
+          const w = body.postsHook.trim();
+          if (w && !WEBHOOK_RE.test(w)) return json({ error: "That isn't a Discord webhook link. It should start with https://discord.com/api/webhooks/" }, 400);
+          c.postsHook = w;
+        }
+        if (typeof body.queueOn === 'boolean') c.queueOn = body.queueOn;
+        if (Number.isInteger(+body.queueHour) && body.queueHour !== undefined && body.queueHour !== null && +body.queueHour >= 0 && +body.queueHour <= 23) c.queueHour = +body.queueHour;
+        if ([3, 5, 8].includes(+body.queueCount)) c.queueCount = +body.queueCount;
         if (typeof body.digestOn === 'boolean') c.digestOn = body.digestOn;
         if (Number.isInteger(+body.digestHour) && +body.digestHour >= 0 && +body.digestHour <= 23 && body.digestHour !== undefined) c.digestHour = +body.digestHour;
         if (typeof body.tz === 'string' && body.tz) { try { new Intl.DateTimeFormat('en', { timeZone: body.tz }); c.tz = body.tz; } catch (e) {} }
@@ -264,6 +274,16 @@ export class Watcher {
         this.addLog('Sent a scout report to Discord.');
         return json({ ok: true });
       }
+      if (path === '/api/queue/now' && method === 'POST') {
+        if (!this.cfg.postsHook) return json({ error: 'Add the Discord webhook for your posts channel first.' }, 400);
+        return json(await this.makeQueue());
+      }
+      if (path === '/api/queue') return json({ queue: this.queue });
+      if (path === '/api/posts/test' && method === 'POST') {
+        if (!this.cfg.postsHook) return json({ error: 'Add the Discord webhook for your posts channel first.' }, 400);
+        await this.discord({ username: 'ClipKit Queue', content: '✅ Your daily video queue will show up in this channel.' }, this.cfg.postsHook);
+        return json({ ok: true });
+      }
       if (path === '/api/digest/now' && method === 'POST') {
         if (!this.cfg.discord) return json({ error: 'Add a Discord webhook link first.' }, 400);
         return json(await this.sendDigest(true));
@@ -283,7 +303,8 @@ export class Watcher {
       clientId: !!this.cfg.clientId,
       connected: !!(this.auth && !this.auth.broken), login: this.auth && this.auth.login, broken: !!(this.auth && this.auth.broken),
       cfg: { enabled: this.cfg.enabled, sensitivity: this.cfg.sensitivity, clipLen: this.cfg.clipLen, maxPerStream: this.cfg.maxPerStream, cooldown: this.cfg.cooldown,
-        discord: this.cfg.discord ? '…' + this.cfg.discord.slice(-6) : '', yt: !!this.cfg.ytKey, alerts: this.cfg.alerts, digestOn: this.cfg.digestOn, digestHour: this.cfg.digestHour, tz: this.cfg.tz },
+        discord: this.cfg.discord ? '…' + this.cfg.discord.slice(-6) : '', yt: !!this.cfg.ytKey,
+        postsHook: this.cfg.postsHook ? '…' + this.cfg.postsHook.slice(-6) : '', queueOn: this.cfg.queueOn, queueHour: this.cfg.queueHour, queueCount: this.cfg.queueCount, queueAt: this.queue && this.queue.at, alerts: this.cfg.alerts, digestOn: this.cfg.digestOn, digestHour: this.cfg.digestHour, tz: this.cfg.tz },
       chat: !!(this.ws && this.session),
       streamers: this.cfg.streamers.map((s) => {
         const L = this.live[s.id], st = this.stats.get(s.id);
@@ -383,6 +404,8 @@ export class Watcher {
     catch (e) { this.addLog('Problem: ' + e.message); }
     try { await this.maybeDigest(); }
     catch (e) { this.addLog('Morning picks failed: ' + e.message); }
+    try { await this.maybeQueue(); }
+    catch (e) { this.addLog('Daily queue failed: ' + e.message); }
     finally { await this.st.setAlarm(this.now() + (anyLive ? 30000 : 60000)); }
   }
   async cycle() {
@@ -650,9 +673,10 @@ export class Watcher {
 
 
   /* ---------------- Discord ---------------- */
-  async discord(payload) {
-    if (!this.cfg.discord) return false;
-    const r = await fetch(this.cfg.discord + '?wait=true', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'ClipKit Auto', allowed_mentions: { parse: [] }, ...payload }) });
+  async discord(payload, hook) {
+    const url = hook || this.cfg.discord;
+    if (!url) return false;
+    const r = await fetch(url + '?wait=true', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'ClipKit Auto', allowed_mentions: { parse: [] }, ...payload }) });
     if (!r.ok) {
       if (r.status === 404 || r.status === 401) throw new Error('Discord says that webhook no longer exists. Paste a new one.');
       throw new Error(`Discord said ${r.status}.`);
@@ -852,6 +876,86 @@ export class Watcher {
     this.ytCache.set(key, { at: this.now(), data });
     if (this.ytCache.size > 20) this.ytCache.delete(this.ytCache.keys().next().value);
     return { ...data, usage: this.ytUsage };
+  }
+
+
+  /* ---------------- Daily video queue ---------------- */
+  async maybeQueue() {
+    if (!this.cfg.queueOn || !this.cfg.postsHook || !this.auth || this.auth.broken || !this.cfg.streamers.length) return;
+    const { day, hour } = this.localNow();
+    if (this.lastQueue === day || hour < this.cfg.queueHour || hour > this.cfg.queueHour + 2) return;
+    this.lastQueue = day; await this.st.put('lastQueue', day);
+    await this.makeQueue();
+  }
+  slotTimes(n) {
+    // best first: Shorts tend to peak late afternoon / evening
+    const order = [16, 18, 19, 17, 20, 15, 21, 14];
+    return order.slice(0, n).map((h) => `${h % 12 || 12}:00 ${h < 12 ? 'AM' : 'PM'}`);
+  }
+  async writeCopy(items) {
+    if (!this.env || !this.env.AI) return null;
+    const list = items.map((it, i) => `${i + 1}. Streamer: ${it.name}${it.game ? ' (playing ' + it.game + ')' : ''}. Clip title: "${it.title}". Why it's good: ${it.why}.${it.chat ? ' Chat was spamming: ' + it.chat + '.' : ''}`).join('\n');
+    const sys = 'You write titles and descriptions for YouTube Shorts made from Twitch stream clips. Titles: under 70 characters, a curiosity hook that makes people want to watch, names the streamer, sounds like a person wrote it, no emojis, no ALL CAPS words except a streamer name, and NEVER invent details that are not in the information given (if the info is thin, keep the title general and honest). Description: one or two short sentences plus a credit line. Hashtags: 3 to 5, always including #shorts and the streamer.';
+    const user = `Write copy for each clip. Give 3 different title options per clip.\n\n${list}`;
+    const schema = { type: 'object', properties: { clips: { type: 'array', items: { type: 'object', properties: { n: { type: 'integer' }, titles: { type: 'array', items: { type: 'string' } }, description: { type: 'string' }, hashtags: { type: 'array', items: { type: 'string' } } }, required: ['n', 'titles', 'description', 'hashtags'] } } }, required: ['clips'] };
+    try {
+      const r = await this.env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', { messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], response_format: { type: 'json_schema', json_schema: schema }, max_tokens: 2000, temperature: 0.6 });
+      const out = typeof r.response === 'string' ? JSON.parse(r.response) : r.response;
+      return out && Array.isArray(out.clips) ? out.clips : null;
+    } catch (e) { return null; }
+  }
+  async makeQueue() {
+    const n = this.cfg.queueCount || 8, since = this.now() - 26 * 3600 * 1000, items = [];
+    const editor = new Set(this.cfg.streamers.filter((s) => s.editor === true).map((s) => s.id));
+    // 1) your own auto clips from the last day
+    for (const c of this.clips.filter((x) => x.status === 'ready' && x.at >= since).slice(0, 20)) {
+      items.push({ kind: 'mine', id: c.id, name: c.name, login: c.login, title: c.title || 'stream moment', why: c.why, chat: (c.top || []).join(', '), game: c.game || '', url: c.url, thumb: c.thumb, score: 70 + (c.manual ? 5 : 0), ready: editor.has(c.broadcaster_id) });
+    }
+    // 2) the best moments other viewers clipped
+    const started = new Date(this.now() - 72 * 3600 * 1000).toISOString();
+    const lists = await Promise.all(this.cfg.streamers.map((s) => this.helix('/clips', { query: { broadcaster_id: s.id, started_at: started, first: '100' } }).then((j) => j.data || []).catch(() => [])));
+    const picks = bestMoments(lists.flat(), this.now(), (c) => Date.parse(c.created_at) >= since, n);
+    const loginOf = (id) => (this.cfg.streamers.find((s) => s.id === id) || {}).login || '';
+    for (const m of picks) {
+      const c = m.best, off = c.vod_offset;
+      items.push({ kind: 'pick', id: c.id, name: c.broadcaster_name, login: loginOf(c.broadcaster_id), title: c.title, why: m.why.join(', ') || `${numFmt(m.views)} views`, chat: '', game: '', url: c.url, thumb: c.thumbnail_url, score: m.score,
+        vod: c.video_id && off != null ? `https://www.twitch.tv/videos/${c.video_id}?t=${Math.floor(off / 3600)}h${Math.floor(off % 3600 / 60)}m${Math.floor(off % 60)}s` : '', ready: false, editor: editor.has(c.broadcaster_id) });
+    }
+    // best first, no more than 3 from one streamer
+    const per = {}, chosen = [];
+    for (const it of items.sort((a, b) => b.score - a.score)) { if ((per[it.name] = (per[it.name] || 0) + 1) > 3) continue; chosen.push(it); if (chosen.length >= n) break; }
+    if (!chosen.length) {
+      await this.discord({ username: 'ClipKit Queue', content: "**🎬 Today's video queue:** nothing strong enough today. Quiet streams. Check back tomorrow." }, this.cfg.postsHook);
+      this.queue = { at: this.now(), items: [] }; await this.st.put('queue', this.queue);
+      return { ok: true, count: 0 };
+    }
+    const copy = await this.writeCopy(chosen);
+    const times = this.slotTimes(chosen.length);
+    chosen.forEach((it, i) => {
+      const w = copy && copy.find((x) => +x.n === i + 1);
+      it.titles = w && w.titles && w.titles.length ? w.titles.slice(0, 3).map((t) => String(t).slice(0, 100)) : [it.title];
+      it.description = (w && w.description ? String(w.description).slice(0, 400) : `${it.name} on stream.`) + (it.login ? `\nFull stream: twitch.tv/${it.login}` : '');
+      it.hashtags = w && Array.isArray(w.hashtags) && w.hashtags.length ? w.hashtags.slice(0, 5).map((t) => '#' + String(t).replace(/^#/, '').replace(/\s+/g, '')) : ['#shorts', '#' + (it.login || 'twitch')];
+      it.postAt = times[i];
+    });
+    this.queue = { at: this.now(), items: chosen }; await this.st.put('queue', this.queue);
+    const how = (it) => it.ready ? '📥 **Ready:** pull it into ClipKit Batch with *Get clips from my auto clipper*.'
+      : it.kind === 'mine' ? '📥 Download it from your Clips Manager (Clips I\'ve created), then add it in ClipKit Batch.'
+      : it.editor ? '✂️ Open Trending → Find the best clips and tap **Clip it now**, then pull it into Batch.'
+      : it.vod ? `✂️ [Clip it yourself from the VOD](${it.vod}), then download it from your Clips Manager.` : '';
+    const embeds = chosen.map((it, i) => ({
+      title: `${i + 1}. ${it.titles[0]}`.slice(0, 250), url: it.url, color: 0xff4f5e,
+      description: [`**Post at ${it.postAt}** · ${it.name} · ${it.why}`,
+        it.titles.length > 1 ? `**Other titles:**\n${it.titles.slice(1).map((t) => '• ' + t).join('\n')}` : '',
+        `**Description:**\n${it.description}\n${it.hashtags.join(' ')}`, how(it)].filter(Boolean).join('\n\n').slice(0, 1500),
+      thumbnail: it.thumb ? { url: it.thumb } : undefined
+    }));
+    const { day } = this.localNow();
+    for (let i = 0; i < embeds.length; i += 4) {
+      await this.discord({ username: 'ClipKit Queue', content: i === 0 ? `**🎬 Today's video queue (${day})**: ${chosen.length} videos, best first. Watch each one, cut the weak ones, and add your own take in the title. Post times are suggestions.` : undefined, embeds: embeds.slice(i, i + 4) }, this.cfg.postsHook);
+    }
+    this.addLog(`Sent today's video queue (${chosen.length} videos) to Discord.`);
+    return { ok: true, count: chosen.length };
   }
 
   async download(id) {

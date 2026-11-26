@@ -288,6 +288,27 @@ details ol{margin-top:6px}
     </section>
 
     <section class="card">
+      <h2>Daily video queue</h2>
+      <p class="mute small">Every day, it picks the best moments, writes 3 title options, a description and hashtags for each, and suggests a time to post. It all lands in its own Discord channel. You review, cut the weak ones, add your take, and post.</p>
+      <div id="pqSet" hidden>
+        <p class="small">Posting to your queue webhook <code id="pqMask"></code></p>
+        <div class="row"><button class="btn" id="pqTest" style="flex:1">Send a test message</button><button class="btn" id="pqRemove">Remove</button></div>
+      </div>
+      <div id="pqNew">
+        <p class="mute small">Paste the webhook link for your posts channel (Server Settings → Integrations → Webhooks → New Webhook → pick the channel → Copy Webhook URL).</p>
+        <div class="row"><input type="text" id="pqIn" placeholder="https://discord.com/api/webhooks/…" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn primary" id="pqSave">Save</button></div>
+        <div class="err" id="pqErr"></div>
+      </div>
+      <label class="chk" id="pqRow"><input type="checkbox" id="pqOn"> Send me a queue every day</label>
+      <div class="grid2">
+        <label>Send it at<select id="pqHour"><option value="9">9 AM</option><option value="11">11 AM</option><option value="12">12 PM</option><option value="13">1 PM</option><option value="15">3 PM</option><option value="17">5 PM</option></select></label>
+        <label>Videos per day<select id="pqCount"><option value="3">Up to 3</option><option value="5">Up to 5</option><option value="8">Up to 8</option></select></label>
+      </div>
+      <button class="btn wide" id="pqNow">Make today's queue now</button>
+      <p class="mute small" id="pqNote" style="margin-top:8px"></p>
+    </section>
+
+    <section class="card">
       <h2>Activity</h2>
       <ul class="log" id="log"></ul>
     </section>
@@ -377,6 +398,12 @@ function render() {
   $('#alertsRow').classList.toggle('off', !hasDc); $('#digestRow').classList.toggle('off', !hasDc);
   if (document.activeElement !== $('#digestHour')) $('#digestHour').value = String(s.cfg.digestHour);
   $('#tzNote').textContent = s.cfg.digestOn && hasDc ? `Morning picks go out between ${s.cfg.digestHour % 12 || 12} ${s.cfg.digestHour < 12 ? 'AM' : 'PM'} and ${(s.cfg.digestHour + 2) % 12 || 12} ${(s.cfg.digestHour + 2) < 12 ? 'AM' : 'PM'} your time (${s.cfg.tz}), covering the last 14 hours.` : '';
+  const hasPq = !!s.cfg.postsHook;
+  $('#pqSet').hidden = !hasPq; $('#pqNew').hidden = hasPq; $('#pqMask').textContent = s.cfg.postsHook;
+  $('#pqOn').checked = s.cfg.queueOn; $('#pqOn').disabled = $('#pqNow').disabled = !hasPq; $('#pqRow').classList.toggle('off', !hasPq);
+  if (document.activeElement !== $('#pqHour')) $('#pqHour').value = String(s.cfg.queueHour);
+  if (document.activeElement !== $('#pqCount')) $('#pqCount').value = String(s.cfg.queueCount);
+  $('#pqNote').textContent = s.cfg.queueAt ? `Last queue: ${ago(s.cfg.queueAt)}.` : '';
   $('#clipLen').value = s.cfg.clipLen; $('#maxPer').value = s.cfg.maxPerStream; $('#cooldown').value = s.cfg.cooldown;
   setHTML($('#log'), s.log.length ? s.log.map((l) => `<li><time>${clock(l.at)}</time><span>${esc(l.text)}</span></li>`).join('') : '<li><span class="mute">Nothing yet.</span></li>');
 }
@@ -655,6 +682,24 @@ function ytRender() {
   $('#ytList').innerHTML = list.slice(0, 60).map((v) => `<div class="tr"><div class="thumb" style="background-image:url('${esc(v.thumb)}')"><span>${v.secs}s</span></div><div><b>${esc(v.title)}</b><small>${esc(v.channel)}${ytScope === 'streamers' ? ' · about ' + esc(v.about) : ''}</small><small><span class="hot">${num(v.perHour)}/hour</span>${med && v.perHour >= med * 3 && v.perHour >= 500 ? '<span class="boom">BLOWING UP</span>' : ''} · ${num(v.views)} views · ${num(v.likes)} likes · ${ago(Date.parse(v.published))}</small><div class="acts"><a class="btn mini" href="${esc(v.url)}" target="_blank" rel="noopener">Watch</a><button class="btn mini" data-ythide="${esc(v.id)}">Hide</button></div></div></div>`).join('');
 }
 $('#ytList').onclick = (e) => { const b = e.target.closest('[data-ythide]'); if (!b) return; hidden.add('yt' + b.dataset.ythide); saveHidden(); ytRender(); };
+
+/* ---------- Daily video queue ---------- */
+$('#pqSave').onclick = async () => {
+  $('#pqErr').textContent = '';
+  try { await api('/api/config', { postsHook: $('#pqIn').value, tz: myTz }); $('#pqIn').value = ''; await api('/api/posts/test', {}); toast('Saved. Check your posts channel for a test message.'); refresh(); }
+  catch (e) { $('#pqErr').textContent = e.message; }
+};
+$('#pqTest').onclick = async () => { try { await api('/api/posts/test', {}); toast('Sent. Check Discord.'); } catch (e) { toast(e.message); } };
+$('#pqRemove').onclick = async () => { try { await api('/api/config', { postsHook: '', queueOn: false }); refresh(); } catch (e) { toast(e.message); } };
+$('#pqOn').onchange = async (e) => { try { await api('/api/config', { queueOn: e.target.checked, tz: myTz }); refresh(); } catch (err) { toast(err.message); } };
+$('#pqHour').onchange = async (e) => { try { await api('/api/config', { queueHour: +e.target.value, tz: myTz }); toast('Saved'); refresh(); } catch (err) { toast(err.message); } };
+$('#pqCount').onchange = async (e) => { try { await api('/api/config', { queueCount: +e.target.value }); toast('Saved'); refresh(); } catch (err) { toast(err.message); } };
+$('#pqNow').onclick = async () => {
+  const b = $('#pqNow'); b.disabled = true; b.textContent = 'Making the queue… (about 20 seconds)';
+  try { const r = await api('/api/queue/now', {}); toast(r.count ? `Sent ${r.count} videos to your posts channel.` : 'Nothing strong enough right now. Sent a note.'); refresh(); }
+  catch (e) { toast(e.message); }
+  finally { b.disabled = false; b.textContent = "Make today's queue now"; }
+};
 
 function loop() { clearTimeout(pollT); if (!document.hidden) refresh(); pollT = setTimeout(loop, 5000); }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) loop(); });
