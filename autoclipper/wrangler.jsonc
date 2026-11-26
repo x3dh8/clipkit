@@ -1,0 +1,12 @@
+{
+  "name": "clipkit-autoclip",
+  "main": "src/index.js",
+  "compatibility_date": "2025-09-01",
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [{ "name": "WATCHER", "class_name": "Watcher" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Watcher"] }],
+  "rules": [{ "type": "Text", "globs": ["**/*.html"], "fallthrough": true }],
+  "observability": { "enabled": true }
+}

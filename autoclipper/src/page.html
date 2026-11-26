@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111215">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Auto Clipper">
+<title>Auto Clipper</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@800;900&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#111215;--panel:#191b20;--panel2:#22252c;--line:#2e323a;--ink:#eceef2;--mute:#9399a4;--acc:#ff4f5e;--hi:#ffd23f;--live:#ff3b47;--ok:#3ddc84}
+*{box-sizing:border-box;min-width:0}
+[hidden]{display:none!important}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.45 Inter,system-ui,sans-serif;-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%}
+button,input,select{font:inherit;color:inherit}
+header{position:sticky;top:0;z-index:5;background:rgba(17,18,21,.95);backdrop-filter:blur(8px);display:flex;align-items:center;gap:10px;padding:calc(env(safe-area-inset-top) + 10px) 16px 10px;border-bottom:1px solid var(--line)}
+.logo{font:900 19px Montserrat,sans-serif;letter-spacing:-.02em}
+.logo b{color:var(--acc)}
+.pill{margin-left:auto;font-size:12.5px;font-weight:600;padding:5px 10px;border-radius:999px;background:var(--panel2);color:var(--mute);display:flex;align-items:center;gap:6px;white-space:nowrap}
+.pill i{width:8px;height:8px;border-radius:50%;background:#555}
+.pill.on i{background:var(--ok);box-shadow:0 0 0 3px rgba(61,220,132,.2)}
+.pill.on{color:var(--ink)}
+.wrap{max-width:620px;margin:0 auto;padding:14px 14px calc(40px + env(safe-area-inset-bottom))}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px;margin-top:14px}
+h1{font:900 26px/1.1 Montserrat,sans-serif;margin:6px 0 8px;letter-spacing:-.02em;text-wrap:balance}
+h2{font-size:15px;margin:0 0 12px;display:flex;align-items:center;gap:8px}
+h2 .n{color:var(--mute);font-weight:500}
+p{margin:0 0 10px}
+.mute{color:var(--mute)}
+.small{font-size:13px}
+ol{margin:0 0 12px;padding-left:22px}
+ol li{margin:6px 0}
+code{background:var(--panel2);padding:1px 6px;border-radius:5px;font-size:13px;overflow-wrap:anywhere}
+a{color:#7cc4ff}
+.btn{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 14px;min-height:44px;display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;text-decoration:none;color:var(--ink);white-space:nowrap}
+.btn.primary{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:700}
+.btn.mini{min-height:36px;padding:5px 11px;font-size:13px}
+.btn:disabled{opacity:.45}
+.btn:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.wide{width:100%}
+input[type=text],select{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-height:44px;width:100%;font-size:16px}
+.row{display:flex;gap:8px;align-items:center}
+.row>input{flex:1}
+.err{color:#ff8a93;font-size:13.5px;margin-top:8px}
+.code{font:900 34px Montserrat,sans-serif;letter-spacing:.08em;text-align:center;background:var(--panel2);border-radius:12px;padding:16px;margin:10px 0}
+.switch{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.switch b{font-size:16px}
+.tog{appearance:none;-webkit-appearance:none;width:54px;height:32px;border-radius:999px;background:#3a3e47;position:relative;cursor:pointer;flex:none;transition:background .2s}
+.tog::after{content:"";position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:50%;background:#fff;transition:transform .2s}
+.tog:checked{background:var(--ok)}
+.tog:checked::after{transform:translateX(22px)}
+.st{display:grid;grid-template-columns:44px minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
+.st:first-of-type{border-top:0}
+.st img{width:44px;height:44px;border-radius:50%;background:var(--panel2);display:block}
+.st b{display:flex;align-items:center;gap:6px;font-size:15px}
+.badge{font-size:10.5px;font-weight:800;letter-spacing:.04em;padding:2px 6px;border-radius:4px;background:var(--live);color:#fff}
+.badge.off{background:#3a3e47;color:var(--mute)}
+.st small{display:block;color:var(--mute);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.meter{height:5px;background:#33373f;border-radius:3px;margin-top:6px;overflow:hidden;max-width:220px}
+.meter i{display:block;height:100%;background:linear-gradient(90deg,var(--hi),var(--acc));transition:width .4s}
+.acts{display:flex;gap:6px}
+.clips{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr));gap:12px}
+.clip{background:var(--panel2);border:1px solid var(--line);border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
+.thumb{aspect-ratio:16/9;background:#000 center/cover no-repeat;position:relative;display:flex;align-items:center;justify-content:center;color:var(--mute);font-size:13px}
+.thumb span{position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,.7);color:#fff;font-size:12px;font-weight:600;padding:2px 7px;border-radius:5px}
+.cbody{padding:10px 12px 12px;display:flex;flex-direction:column;gap:4px}
+.cbody b{font-size:14px}
+.cbody small{color:var(--mute);font-size:12.5px}
+.tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:2px}
+.tags em{font-style:normal;font-size:11.5px;background:#2c3038;border-radius:5px;padding:2px 6px;color:var(--hi)}
+.cacts{display:grid;grid-template-columns:1fr 1fr auto;gap:6px;margin-top:8px}
+.note{font-size:12.5px;color:var(--mute);background:#1c1f25;border-radius:8px;padding:8px 10px;margin-top:6px}
+.seg{display:grid;grid-template-columns:repeat(3,1fr);background:var(--panel2);border-radius:10px;padding:3px;gap:3px}
+.seg button{border:0;background:none;border-radius:8px;padding:8px 4px;min-height:42px;color:var(--mute);cursor:pointer}
+.seg button.on{background:#3a3e47;color:var(--ink);font-weight:600}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.grid2 label,.lbl{display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(--mute)}
+.log{list-style:none;margin:0;padding:0;font-size:13.5px}
+.log li{display:grid;grid-template-columns:64px minmax(0,1fr);gap:8px;padding:6px 0;border-top:1px solid var(--line)}
+.log li:first-child{border-top:0}
+.log time{color:var(--mute);font-variant-numeric:tabular-nums;font-size:12.5px}
+.empty{color:var(--mute);text-align:center;padding:14px 6px;font-size:14px}
+#toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#2b2f37;border:1px solid var(--line);padding:10px 16px;border-radius:12px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s;width:max-content;max-width:90vw;z-index:9}
+#toast.show{opacity:1}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">Clip<b>Kit</b> Auto</div>
+  <div class="pill" id="pill"><i></i><span>Loading…</span></div>
+</header>
+<div class="wrap">
+
+  <section class="card" id="vClaim" hidden>
+    <h1>Set up your auto clipper</h1>
+    <p class="mute">First, register a free Twitch app so this clipper is allowed to make clips for you. It takes about 5 minutes.</p>
+    <ol>
+      <li>Open <a href="https://dev.twitch.tv/console/apps/create" target="_blank" rel="noopener">dev.twitch.tv/console/apps/create</a> and sign in with your Twitch account. Twitch may ask you to turn on two-factor sign-in first.</li>
+      <li><b>Name:</b> anything unique, like <code>clipkit-auto-yourname</code>.</li>
+      <li><b>OAuth Redirect URLs:</b> <code>http://localhost</code></li>
+      <li><b>Category:</b> Application Integration.</li>
+      <li><b>Client Type:</b> <b>Public</b>. This part matters.</li>
+      <li>Tap <b>Create</b>, open the app with <b>Manage</b>, and copy the <b>Client ID</b>.</li>
+    </ol>
+    <label class="lbl">Client ID<input type="text" id="cid" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste it here"></label>
+    <button class="btn primary wide" id="saveCid" style="margin-top:12px">Save and continue</button>
+    <div class="err" id="claimErr"></div>
+  </section>
+
+  <section class="card" id="vKey" hidden>
+    <h1>Enter your access key</h1>
+    <p class="mute">This auto clipper is already set up. Open the link from “Use on another device” on the phone you set it up on, or paste the key here.</p>
+    <div class="row"><input type="text" id="keyIn" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Access key"><button class="btn primary" id="keyGo">Go</button></div>
+    <div class="err" id="keyErr"></div>
+  </section>
+
+  <section class="card" id="vConnect" hidden>
+    <h1>Connect your Twitch</h1>
+    <p class="mute" id="connectMsg">Clips get made on your account, the same as tapping Clip yourself.</p>
+    <button class="btn primary wide" id="connectBtn">Get a sign-in code</button>
+    <div id="codeBox" hidden>
+      <p style="margin-top:14px">Open Twitch, make sure you're signed in, and enter this code:</p>
+      <div class="code" id="code"></div>
+      <a class="btn primary wide" id="activate" target="_blank" rel="noopener">Open twitch.tv/activate</a>
+      <p class="mute small" style="margin-top:10px">This page waits and continues on its own once you approve.</p>
+    </div>
+    <div class="err" id="connectErr"></div>
+  </section>
+
+  <div id="vMain" hidden>
+    <section class="card">
+      <div class="switch">
+        <div><b>Auto-clipping</b><div class="mute small" id="statusLine"></div></div>
+        <input type="checkbox" class="tog" id="enabled" aria-label="Auto-clipping on or off">
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Streamers <span class="n" id="stCount"></span></h2>
+      <div class="row"><input type="text" id="addIn" placeholder="Twitch username" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn primary" id="addBtn">Add</button></div>
+      <div class="err" id="addErr"></div>
+      <div id="stList" style="margin-top:8px"></div>
+    </section>
+
+    <section class="card">
+      <h2>Clips <span class="n" id="clipCount"></span></h2>
+      <div class="clips" id="clipList"></div>
+    </section>
+
+    <section class="card">
+      <h2>How picky to be</h2>
+      <div class="seg" id="sens"><button data-v="chill">Chill</button><button data-v="normal">Normal</button><button data-v="hyped">Hyped</button></div>
+      <p class="mute small" id="sensHint" style="margin-top:8px"></p>
+      <div class="grid2">
+        <label>Clip length<select id="clipLen"><option value="15">15 sec</option><option value="20">20 sec</option><option value="30">30 sec</option><option value="45">45 sec</option><option value="60">60 sec</option></select></label>
+        <label>Max per stream<select id="maxPer"><option value="1">1</option><option value="3">3</option><option value="5">5</option><option value="10">10</option><option value="20">20</option></select></label>
+      </div>
+      <div class="grid2" style="grid-template-columns:1fr">
+        <label>Wait between clips of the same streamer<select id="cooldown"><option value="60">1 minute</option><option value="120">2 minutes</option><option value="300">5 minutes</option><option value="600">10 minutes</option></select></label>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Activity</h2>
+      <ul class="log" id="log"></ul>
+    </section>
+
+    <section class="card">
+      <h2>Use on another device</h2>
+      <p class="mute small">This link opens the auto clipper already signed in. Keep it private: anyone with it can control your clipper.</p>
+      <button class="btn wide" id="copyLink">Copy my private link</button>
+      <button class="btn wide" id="logout" style="margin-top:8px">Disconnect Twitch</button>
+    </section>
+  </div>
+</div>
+<div id="toast" role="status"></div>
+
+<script>
+{
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const SENS_HINT = { chill: 'Only the biggest moments, when chat goes 4× faster than usual.', normal: 'Clear hype moments, when chat goes about 3× faster than usual.', hyped: 'Catches smaller moments too. Expect more clips.' };
+let key = '';
+try { key = localStorage.getItem('acKey') || ''; } catch (e) {}
+const hk = location.hash.match(/key=([a-f0-9]+)/);
+if (hk) { key = hk[1]; try { localStorage.setItem('acKey', key); } catch (e) {} history.replaceState(null, '', location.pathname); }
+let S = null, pollT = null, notes = {};
+let toastT;
+function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 3500); }
+async function api(path, body) {
+  const r = await fetch(path, { method: body ? 'POST' : 'GET', headers: { 'content-type': 'application/json', 'x-clipkit-key': key }, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(j.error || 'Something went wrong.'); e.status = r.status; throw e; }
+  return j;
+}
+function show(id) { for (const v of ['#vClaim', '#vKey', '#vConnect', '#vMain']) $(v).hidden = v !== id; }
+function ago(t) { const s = Math.max(1, Math.round((Date.now() - t) / 1000)); if (s < 60) return s + 's ago'; const m = Math.round(s / 60); if (m < 60) return m + ' min ago'; const h = Math.round(m / 60); if (h < 24) return h + ' h ago'; return Math.round(h / 24) + ' d ago'; }
+function clock(t) { return new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
+
+async function refresh() {
+  let s;
+  try { s = await api('/api/state'); }
+  catch (e) { if (e.status === 401) { show('#vKey'); setPill('Locked'); return; } setPill('Offline'); return; }
+  if (s.unclaimed) { show('#vClaim'); setPill('Not set up'); return; }
+  S = s;
+  if (!s.connected) { show('#vConnect'); $('#connectMsg').textContent = s.broken ? 'Your Twitch sign-in expired. Connect again to keep clipping.' : 'Clips get made on your account, the same as tapping Clip yourself.'; setPill('Not connected'); return; }
+  show('#vMain'); render();
+}
+function setPill(text, on) { $('#pill').classList.toggle('on', !!on); $('#pill span').textContent = text; }
+function render() {
+  const s = S, live = s.streamers.filter((x) => x.live);
+  $('#enabled').checked = s.cfg.enabled;
+  setPill(!s.cfg.enabled ? 'Off' : s.chat ? `Watching ${live.length}` : live.length ? 'Connecting…' : 'Waiting for streams', s.cfg.enabled && s.chat);
+  $('#statusLine').textContent = !s.cfg.enabled ? 'Off. Nothing will be clipped.' : !s.streamers.length ? 'Add some streamers below.' : live.length ? `${live.length} of ${s.streamers.length} live. Watching chat for hype.` : `None of your ${s.streamers.length} streamers are live. It checks every minute.`;
+  $('#stCount').textContent = s.streamers.length ? `${s.streamers.length}` : '';
+  $('#stList').innerHTML = s.streamers.length ? s.streamers.map((x) => {
+    const pct = x.live && x.base ? Math.min(100, Math.round(x.rate / (x.base * 3) * 100)) : 0;
+    const sub = x.live ? `${esc(x.game || 'Live')} · ${Number(x.viewers || 0).toLocaleString()} watching · ${x.clips} clip${x.clips === 1 ? '' : 's'} this stream` : 'Offline';
+    const chat = x.live ? (x.base == null ? 'Learning normal chat speed…' : `Chat ${x.rate}/sec · normal ${x.base}/sec`) : '';
+    return `<div class="st"><img src="${esc(x.avatar)}" alt="" loading="lazy"><div><b>${esc(x.name)} <span class="badge${x.live ? '' : ' off'}">${x.live ? 'LIVE' : 'OFF'}</span></b><small>${sub}</small>${x.live ? `<small>${chat}</small><div class="meter"><i style="width:${pct}%"></i></div>` : ''}</div><div class="acts">${x.live ? `<button class="btn mini" data-clip="${esc(x.id)}">Clip now</button>` : ''}<button class="btn mini" data-rm="${esc(x.id)}" aria-label="Remove ${esc(x.name)}">✕</button></div></div>`;
+  }).join('') : '<div class="empty">No streamers yet. Add a few you like to clip.</div>';
+  $('#clipCount').textContent = s.clips.length ? `${s.clips.length}` : '';
+  $('#clipList').innerHTML = s.clips.length ? s.clips.map((c) => {
+    const th = c.thumb ? `style="background-image:url('${esc(c.thumb)}')"` : '';
+    const label = c.status === 'processing' ? 'Processing…' : c.status === 'failed' ? 'Twitch couldn’t make this one' : '';
+    return `<article class="clip"><div class="thumb" ${th}>${label}<span>${esc(c.name)}</span></div><div class="cbody"><b>${esc(c.why)}</b><small>${ago(c.at)}${c.game ? ' · ' + esc(c.game) : ''}${c.manual ? ' · by you' : ''}</small>${c.top && c.top.length ? `<div class="tags">${c.top.map((t) => `<em>${esc(t)}</em>`).join('')}</div>` : ''}<div class="cacts"><a class="btn mini" href="${esc(c.url)}" target="_blank" rel="noopener">Watch</a><button class="btn mini" data-dl="${esc(c.id)}"${c.status !== 'ready' ? ' disabled' : ''}>Download</button><button class="btn mini" data-del="${esc(c.id)}" aria-label="Remove from list">✕</button></div>${notes[c.id] || ''}</div></article>`;
+  }).join('') : '<div class="empty">No clips yet. When chat explodes on a live stream, clips show up here.</div>';
+  for (const b of $('#sens').children) b.classList.toggle('on', b.dataset.v === s.cfg.sensitivity);
+  $('#sensHint').textContent = SENS_HINT[s.cfg.sensitivity];
+  $('#clipLen').value = s.cfg.clipLen; $('#maxPer').value = s.cfg.maxPerStream; $('#cooldown').value = s.cfg.cooldown;
+  $('#log').innerHTML = s.log.length ? s.log.map((l) => `<li><time>${clock(l.at)}</time><span>${esc(l.text)}</span></li>`).join('') : '<li><span class="mute">Nothing yet.</span></li>';
+}
+
+$('#saveCid').onclick = async () => {
+  $('#claimErr').textContent = '';
+  try { const j = await api('/api/setup', { clientId: $('#cid').value }); key = j.key; try { localStorage.setItem('acKey', key); } catch (e) {} refresh(); }
+  catch (e) { $('#claimErr').textContent = e.message; }
+};
+$('#keyGo').onclick = () => { key = $('#keyIn').value.trim(); try { localStorage.setItem('acKey', key); } catch (e) {} refresh(); };
+let devPoll = null;
+$('#connectBtn').onclick = async () => {
+  $('#connectErr').textContent = ''; clearTimeout(devPoll);
+  try {
+    const d = await api('/api/auth/start', {});
+    $('#codeBox').hidden = false; $('#code').textContent = d.user_code; $('#activate').href = d.verification_uri;
+    $('#connectBtn').textContent = 'Get a new code';
+    const poll = async () => {
+      try {
+        const r = await api('/api/auth/poll', {});
+        if (r.ok) { toast('Connected as ' + r.login); $('#codeBox').hidden = true; refresh(); return; }
+        if (r.error) { $('#connectErr').textContent = r.error; $('#codeBox').hidden = true; return; }
+      } catch (e) { $('#connectErr').textContent = e.message; return; }
+      devPoll = setTimeout(poll, (d.interval || 5) * 1000);
+    };
+    devPoll = setTimeout(poll, (d.interval || 5) * 1000);
+  } catch (e) { $('#connectErr').textContent = e.message; }
+};
+$('#enabled').onchange = async (e) => { try { await api('/api/config', { enabled: e.target.checked }); refresh(); } catch (err) { toast(err.message); } };
+async function addStreamer() {
+  const v = $('#addIn').value.trim(); if (!v) return;
+  $('#addErr').textContent = ''; $('#addBtn').disabled = true;
+  try { await api('/api/streamers/add', { login: v }); $('#addIn').value = ''; refresh(); }
+  catch (e) { $('#addErr').textContent = e.message; }
+  finally { $('#addBtn').disabled = false; }
+}
+$('#addBtn').onclick = addStreamer;
+$('#addIn').addEventListener('keydown', (e) => { if (e.key === 'Enter') addStreamer(); });
+$('#stList').onclick = async (e) => {
+  const rm = e.target.closest('[data-rm]'), cl = e.target.closest('[data-clip]');
+  try {
+    if (rm) { await api('/api/streamers/remove', { id: rm.dataset.rm }); refresh(); }
+    if (cl) { cl.disabled = true; await api('/api/clip-now', { id: cl.dataset.clip }); toast('Clipping… it shows up below in a few seconds.'); refresh(); }
+  } catch (err) { toast(err.message); if (cl) cl.disabled = false; }
+};
+$('#clipList').onclick = async (e) => {
+  const dl = e.target.closest('[data-dl]'), del = e.target.closest('[data-del]');
+  try {
+    if (del) { await api('/api/clips/remove', { id: del.dataset.del }); refresh(); }
+    if (dl) {
+      const id = dl.dataset.dl; dl.disabled = true;
+      const r = await api('/api/clips/download', { id });
+      dl.disabled = false;
+      if (r.url) { window.open(r.url, '_blank', 'noopener'); return; }
+      const c = S.clips.find((x) => x.id === id);
+      notes[id] = `<div class="note">Twitch only lets apps download clips from channels you're an editor for. To save this one, open <a href="https://dashboard.twitch.tv/u/${esc(S.login)}/content/clips" target="_blank" rel="noopener">your Clips Manager</a>, pick <b>Clips I've created</b>, and download it there.</div>`;
+      render();
+    }
+  } catch (err) { toast(err.message); if (dl) dl.disabled = false; }
+};
+$('#sens').onclick = async (e) => { const b = e.target.closest('button'); if (!b) return; try { await api('/api/config', { sensitivity: b.dataset.v }); refresh(); } catch (err) { toast(err.message); } };
+for (const [id, k] of [['#clipLen', 'clipLen'], ['#maxPer', 'maxPerStream'], ['#cooldown', 'cooldown']]) $(id).onchange = async (e) => { try { await api('/api/config', { [k]: +e.target.value }); toast('Saved'); } catch (err) { toast(err.message); } };
+$('#copyLink').onclick = async () => {
+  const link = `${location.origin}/#key=${key}`;
+  try { await navigator.clipboard.writeText(link); toast('Link copied. Paste it somewhere private.'); }
+  catch (e) { prompt('Copy this link:', link); }
+};
+$('#logout').onclick = async () => { try { await api('/api/logout', {}); refresh(); } catch (e) { toast(e.message); } };
+function loop() { clearTimeout(pollT); if (!document.hidden) refresh(); pollT = setTimeout(loop, 5000); }
+document.addEventListener('visibilitychange', () => { if (!document.hidden) loop(); });
+loop();
+}
+</script>
+</body>
+</html>
