@@ -11,6 +11,12 @@ const WINDOW = 600; // seconds of per-second chat stats kept per channel
 // Words and emotes that chat spams when something hype or funny happens.
 const HYPE_RE = /^(kekw|lulw?|omegalul|icant|pog\w*|monka\w*|wicked|lmf?ao+|ha(ha)+|holy|wtf|no{3,}|na+h{2,}|nah{2,}|💀+|😂+|🤣+|🔥+|\+\d|clip(ped|it)?|insane|crazy|omg|wha{2,}t+|what{2,}|gg+|ez|clap|kreygasm|bruh+|sheesh|w+)$/i;
 const CLIP_RE = /\bclip(\s*it|ped|\s*that)?\b/i;
+// Words chat uses when a streamer says something real or deep (for Talk-style streamers)
+const AGREE_TOK = /^(real+|fr+|frfr|facts?|true+|truth|wise|deep|goat|based|preach|valid|agreed?|ong|this+|💯+|🙏+|😭+|❤️+|❤+|🫡+|👏+|🥹+|🫶+|👍+|\+1|w+)$/i;
+const STRONG_AGREE = /^(fr+|frfr|facts?|preach|goat|based|ong|agreed?|💯+|🙏+|😭+|❤️+|❤+|🫡+|👏+|🥹+|🫶+|\+1)$/i;
+const AGREE_PHRASE = /\b(so real|real talk|needed (to hear )?this|so true|this is (so )?true|w take|on god|wise words|life advice|core memory|thank you joe|that's deep|that hit|hit different|literally me|so fr)\b/i;
+// talk mode: how many people must agree in 20 seconds, and how many times more than normal
+const TALK = { chill: { mult: 3.0, min: 10 }, normal: { mult: 2.2, min: 7 }, hyped: { mult: 1.7, min: 5 } };
 
 // min5 = how many different people must be chatting in 5 seconds; mult = how many times the normal amount
 const SENS = {
@@ -41,6 +47,8 @@ class ChannelStats {
     this.people = Array.from({ length: WINDOW }, () => null);
     this.hypers = Array.from({ length: WINDOW }, () => null);
     this.askers = Array.from({ length: WINDOW }, () => null);
+    this.agreers = Array.from({ length: WINDOW }, () => null);
+    this.baseA = null; this.baseU20 = null; this.lastA20 = 0;
     this.sec = 0; this.base = null; this.seen = 0; this.lastClip = 0; this.quietUntil = 0; this.lastU5 = 0; this.warmSum = 0;
   }
   union(arr, now, secs) {
@@ -51,15 +59,20 @@ class ChannelStats {
   roll(now) {
     if (!this.sec) { this.sec = now; return; }
     for (let s = this.sec + 1; s <= now && s - this.sec <= WINDOW; s++) {
-      const i = s % WINDOW; this.n[i] = 0; this.h[i] = 0; this.c[i] = 0; this.tokens[i] = null; this.people[i] = null; this.hypers[i] = null; this.askers[i] = null;
+      const i = s % WINDOW; this.n[i] = 0; this.h[i] = 0; this.c[i] = 0; this.tokens[i] = null; this.people[i] = null; this.hypers[i] = null; this.askers[i] = null; this.agreers[i] = null;
     }
     if (now > this.sec) this.sec = now;
   }
-  add(now, who, hypeTokens, isClip) {
+  add(now, who, hypeTokens, isClip, agreeTokens = []) {
     this.roll(now);
     const i = now % WINDOW;
     this.n[i]++;
     (this.people[i] || (this.people[i] = new Set())).add(who);
+    if (agreeTokens.length) {
+      (this.agreers[i] || (this.agreers[i] = new Set())).add(who);
+      const m = this.tokens[i] || (this.tokens[i] = new Map());
+      for (const t of agreeTokens) m.set(t, (m.get(t) || 0) + 1);
+    }
     if (isClip) (this.askers[i] || (this.askers[i] = new Set())).add(who);
     if (hypeTokens.length) {
       this.h[i]++;
@@ -169,6 +182,13 @@ export class Watcher {
       if (path === '/api/auth/poll' && method === 'POST') return json(await this.authPoll());
       if (path === '/api/logout' && method === 'POST') { await this.closeWs(); this.auth = null; await this.st.delete('auth'); return json({ ok: true }); }
       if (path === '/api/streamers/add' && method === 'POST') return json(await this.addStreamer(body.login));
+      if (path === '/api/streamers/style' && method === 'POST') {
+        const s = this.cfg.streamers.find((x) => x.id === body.id);
+        if (!s || !['hype', 'talk'].includes(body.style)) return json({ error: 'Unknown streamer or style' }, 400);
+        s.style = body.style; await this.st.put('cfg', this.cfg);
+        this.addLog(`${s.name} set to ${body.style === 'talk' ? 'Talk' : 'Hype'} style.`);
+        return json({ ok: true });
+      }
       if (path === '/api/streamers/remove' && method === 'POST') {
         this.cfg.streamers = this.cfg.streamers.filter((s) => s.id !== body.id);
         await this.st.put('cfg', this.cfg); await this.kick(); return json({ ok: true });
@@ -228,7 +248,7 @@ export class Watcher {
       streamers: this.cfg.streamers.map((s) => {
         const L = this.live[s.id], st = this.stats.get(s.id);
         const rate = st ? st.lastU5 : 0;
-        return { ...s, live: !!L, title: L && L.title, game: L && L.game, viewers: L && L.viewers, since: L && L.since,
+        return { ...s, style: s.style || 'hype', agree: st ? st.lastA20 : 0, live: !!L, title: L && L.title, game: L && L.game, viewers: L && L.viewers, since: L && L.since,
           rate: Math.round(rate * 10) / 10, base: st && st.base != null ? Math.round(st.base * 10) / 10 : null,
           clips: L ? this.clips.filter((c) => c.broadcaster_id === s.id && c.streamKey === L.since).length : 0 };
       }),
@@ -435,7 +455,17 @@ export class Watcher {
     const words = text.split(/\s+/).filter(Boolean);
     const hype = [];
     for (const w of words) { const t = w.replace(/[!?.,]+$/, ''); if (t && HYPE_RE.test(t)) hype.push(t.length > 18 ? t.slice(0, 18) : t); }
-    st.add(Math.floor(this.now() / 1000), ev.chatter_user_id || login || Math.random(), hype, CLIP_RE.test(text));
+    const agree = [];
+    // Plain words like "real", "this" or "deep" only count when the whole message is a reaction ("real", "so real 🙏").
+    // Strong ones ("facts", "frfr", 🙏, 💯) count in any short message.
+    const clean = words.map((w) => w.replace(/[!?.,]+$/, '')).filter(Boolean);
+    const allAgree = clean.length && clean.length <= 4 && clean.every((t) => AGREE_TOK.test(t) || /^(so|that|is|its|it's|bro|joe|thats|that's)$/i.test(t));
+    for (const t of clean) {
+      if (!AGREE_TOK.test(t) || HYPE_RE.test(t) || /^(so|that|is|its|it's|bro|joe|thats|that's)$/i.test(t)) continue;
+      if (allAgree || (clean.length <= 5 && STRONG_AGREE.test(t))) agree.push(t.toLowerCase());
+    }
+    const ph = text.match(AGREE_PHRASE); if (ph) agree.push(ph[0].toLowerCase());
+    st.add(Math.floor(this.now() / 1000), ev.chatter_user_id || login || Math.random(), hype, CLIP_RE.test(text), agree);
   }
 
   tick() {
@@ -447,12 +477,28 @@ export class Watcher {
       // count PEOPLE, not messages, so a few spammers can't fake a spike
       const u5 = st.union(st.people, nowS - 1, 5), hp5 = st.union(st.hypers, nowS - 1, 5), ask10 = st.union(st.askers, nowS - 1, 10);
       st.lastU5 = u5;
+      const talk = this.styleOf(id) === 'talk';
+      const a20 = talk ? st.union(st.agreers, nowS - 1, 20) : 0, u20 = talk ? st.union(st.people, nowS - 1, 20) : 0;
+      st.lastA20 = a20;
       st.seen++;
-      if (st.seen <= 60) { st.warmSum += u5; st.base = st.warmSum / st.seen; continue; } // learn normal first
+      if (st.seen <= 60) {
+        st.warmSum += u5; st.base = st.warmSum / st.seen;
+        st.warmA = (st.warmA || 0) + a20; st.baseA = st.warmA / st.seen;
+        continue; // learn normal first
+      }
       const quiet = this.now() < st.quietUntil;
       const spiking = u5 > st.base * 1.5;
       st.base += (u5 - st.base) * (quiet ? 1 / 20 : spiking ? 1 / 900 : 1 / 120);
+      if (talk) { const up = a20 > (st.baseA || 0) * 1.5; st.baseA += (a20 - st.baseA) * (quiet ? 1 / 20 : up ? 1 / 900 : 1 / 180); }
       if (quiet) continue; // raid, gifted subs, etc.
+      if (talk) {
+        const T = TALK[this.cfg.sensitivity] || TALK.normal;
+        if (a20 >= T.min && a20 >= Math.max(st.baseA, 1) * T.mult && a20 / Math.max(u20, 1) >= 0.2) {
+          const top = st.top(nowS - 1, 20).filter(([t]) => AGREE_TOK.test(t) || AGREE_PHRASE.test(t));
+          this.tryClip(id, `${a20} people saying ${top.length ? top.slice(0, 2).map(([t]) => `“${t}”`).join(' and ') : 'it’s real'}`, top, 60);
+          continue;
+        }
+      }
       const base = Math.max(st.base, 1);
       const fast = u5 >= S.min5 && u5 >= base * S.mult;
       const hypeShare = u5 ? hp5 / u5 : 0;
@@ -462,6 +508,7 @@ export class Watcher {
       this.tryClip(id, why, st.top(nowS - 1, 10));
     }
   }
+  styleOf(id) { const s = this.cfg.streamers.find((x) => x.id === id); return (s && s.style) || 'hype'; }
   canClip(id) {
     const L = this.live[id], st = this.statsFor(id);
     if (!L || !this.cfg.enabled) return false;
@@ -472,6 +519,7 @@ export class Watcher {
     if (!this.canClip(id)) return;
     this.statsFor(id).lastClip = this.now();
     const s = this.cfg.streamers.find((x) => x.id === id);
+    if (s && s.style === 'talk') duration = 60;
     if (s) this.createClip(s, why, top, false, duration).catch((e) => this.addLog(`Clip failed for ${s.name}: ${e.message}`));
   }
   // When several different viewers clip within the last minute, something good just happened

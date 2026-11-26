@@ -111,6 +111,9 @@ input[type=text],select{background:var(--panel2);border:1px solid var(--line);bo
 details{margin:8px 0 10px;font-size:13.5px}
 details summary{cursor:pointer;color:#7cc4ff;min-height:32px;display:flex;align-items:center}
 details ol{margin-top:6px}
+.style{display:inline-flex;background:var(--panel2);border-radius:8px;padding:2px;gap:2px;margin-top:6px}
+.style button{border:0;background:none;color:var(--mute);font-size:12px;font-weight:600;padding:4px 10px;border-radius:6px;min-height:28px;cursor:pointer}
+.style button.on{background:#3a3e47;color:var(--ink)}
 #toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#2b2f37;border:1px solid var(--line);padding:10px 16px;border-radius:12px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s;width:max-content;max-width:90vw;z-index:9}
 #toast.show{opacity:1}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -195,6 +198,7 @@ details ol{margin-top:6px}
       <h2>Streamers <span class="n" id="stCount"></span></h2>
       <div class="row"><input type="text" id="addIn" placeholder="Twitch username" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn primary" id="addBtn">Add</button></div>
       <div class="err" id="addErr"></div>
+      <p class="mute small" style="margin-top:8px"><b>Hype</b> clips when chat explodes. <b>Talk</b> is for streamers whose best moments are deep or real talks: it watches for chat agreeing (“so real”, “facts”, 🙏) and makes 60-second clips so the moment has context. Talk still catches funny moments too.</p>
       <div id="stList" style="margin-top:8px"></div>
     </section>
 
@@ -298,8 +302,8 @@ function render() {
   $('#stList').innerHTML = s.streamers.length ? s.streamers.map((x) => {
     const pct = x.live && x.base ? Math.min(100, Math.round(x.rate / (x.base * 3) * 100)) : 0;
     const sub = x.live ? `${esc(x.game || 'Live')} · ${Number(x.viewers || 0).toLocaleString()} watching · ${x.clips} clip${x.clips === 1 ? '' : 's'} this stream` : 'Offline';
-    const chat = x.live ? (x.base == null ? 'Learning normal chat speed…' : `${x.rate} people chatting now · normal ${x.base}`) : '';
-    return `<div class="st"><img src="${esc(x.avatar)}" alt="" loading="lazy"><div><b>${esc(x.name)} <span class="badge${x.live ? '' : ' off'}">${x.live ? 'LIVE' : 'OFF'}</span></b><small>${sub}</small>${x.live ? `<small>${chat}</small><div class="meter"><i style="width:${pct}%"></i></div>` : ''}</div><div class="acts">${x.live ? `<button class="btn mini" data-clip="${esc(x.id)}">Clip now</button>` : ''}<button class="btn mini" data-rm="${esc(x.id)}" aria-label="Remove ${esc(x.name)}">✕</button></div></div>`;
+    const chat = x.live ? (x.base == null ? 'Learning normal chat speed…' : `${x.rate} people chatting now · normal ${x.base}` + (x.style === 'talk' ? ` · ${x.agree} agreeing` : '')) : '';
+    return `<div class="st"><img src="${esc(x.avatar)}" alt="" loading="lazy"><div><b>${esc(x.name)} <span class="badge${x.live ? '' : ' off'}">${x.live ? 'LIVE' : 'OFF'}</span></b><small>${sub}</small>${x.live ? `<small>${chat}</small><div class="meter"><i style="width:${pct}%"></i></div>` : ''}<div class="style" role="group" aria-label="Clip style for ${esc(x.name)}"><button data-style="hype" data-sid="${esc(x.id)}" class="${x.style !== 'talk' ? 'on' : ''}">Hype</button><button data-style="talk" data-sid="${esc(x.id)}" class="${x.style === 'talk' ? 'on' : ''}">Talk</button></div></div><div class="acts">${x.live ? `<button class="btn mini" data-clip="${esc(x.id)}">Clip now</button>` : ''}<button class="btn mini" data-rm="${esc(x.id)}" aria-label="Remove ${esc(x.name)}">✕</button></div></div>`;
   }).join('') : '<div class="empty">No streamers yet. Add a few you like to clip.</div>';
   $('#clipCount').textContent = s.clips.length ? `${s.clips.length}` : '';
   $('#clipList').innerHTML = s.clips.length ? s.clips.map((c) => {
@@ -355,8 +359,9 @@ async function addStreamer() {
 $('#addBtn').onclick = addStreamer;
 $('#addIn').addEventListener('keydown', (e) => { if (e.key === 'Enter') addStreamer(); });
 $('#stList').onclick = async (e) => {
-  const rm = e.target.closest('[data-rm]'), cl = e.target.closest('[data-clip]');
+  const rm = e.target.closest('[data-rm]'), cl = e.target.closest('[data-clip]'), sty = e.target.closest('[data-style]');
   try {
+    if (sty) { await api('/api/streamers/style', { id: sty.dataset.sid, style: sty.dataset.style }); toast(sty.dataset.style === 'talk' ? 'Talk style: clips the deep moments when chat agrees (“so real”, 🙏), 60 seconds long.' : 'Hype style: clips when chat explodes.'); refresh(); return; }
     if (rm) { await api('/api/streamers/remove', { id: rm.dataset.rm }); refresh(); }
     if (cl) { cl.disabled = true; await api('/api/clip-now', { id: cl.dataset.clip }); toast('Clipping… it shows up below in a few seconds.'); refresh(); }
   } catch (err) { toast(err.message); if (cl) cl.disabled = false; }
