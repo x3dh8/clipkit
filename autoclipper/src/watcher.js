@@ -991,7 +991,7 @@ export class Watcher {
       it.titles = titles.length ? [...new Set(titles)].slice(0, 3) : [clean(it.title).slice(0, 100) || `${it.name} stream moment`];
       it.description = (w && w.description ? clean(w.description).slice(0, 400) : `${it.name} on stream.`) + `\nClip from ${it.name}'s stream${it.login ? `: twitch.tv/${it.login}` : ''}. All credit to ${it.name}.`;
       const tags = (w && Array.isArray(w.hashtags) ? w.hashtags : []).map((t) => '#' + String(t).replace(/[^\p{L}\p{N}_]/gu, '')).filter((t) => t.length > 2 && !BAD_WORDS.test(t) && !/^#(fyp|foryou|foryoupage|viral|trending|explore|xyzbca|blowup)$/i.test(t));
-      it.hashtags = [...new Set(['#shorts', ...tags.map((t) => t.toLowerCase() === '#shorts' ? '#shorts' : t), ...(it.login ? ['#' + it.login] : [])])].slice(0, 5);
+      const seen = new Set(); it.hashtags = ['#shorts', ...tags, ...(it.login ? ['#' + it.login] : [])].filter((t) => !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase())).slice(0, 5);
       it.angle = w && w.angle ? clean(w.angle).slice(0, 200) : '';
       it.postAt = times[i];
     });
