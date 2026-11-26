@@ -178,6 +178,7 @@ input[type=text],select{background:var(--panel2);border:1px solid var(--line);bo
 
     <section class="card">
       <h2>Clips <span class="n" id="clipCount"></span></h2>
+      <p class="mute small">Download clips, then drop them all into <a href="https://x3dh8.github.io/clipkit/#batch" target="_blank" rel="noopener">ClipKit Batch</a> to turn them into finished vertical videos with captions and a title.</p>
       <div class="clips" id="clipList"></div>
     </section>
 
@@ -315,9 +316,9 @@ $('#clipList').onclick = async (e) => {
       const id = dl.dataset.dl; dl.disabled = true;
       const r = await api('/api/clips/download', { id });
       dl.disabled = false;
-      if (r.url) { window.open(r.url, '_blank', 'noopener'); return; }
+      if (r.url) { window.open(r.url, '_blank', 'noopener'); toast('Downloading. Then add it in ClipKit Batch.'); return; }
       const c = S.clips.find((x) => x.id === id);
-      notes[id] = `<div class="note">Twitch only lets apps download clips from channels you're an editor for. To save this one, open <a href="https://dashboard.twitch.tv/u/${esc(S.login)}/content/clips" target="_blank" rel="noopener">your Clips Manager</a>, pick <b>Clips I've created</b>, and download it there.</div>`;
+      notes[id] = `<div class="note">Twitch only lets apps download clips from channels you're an editor for. To save this one, open <a href="https://dashboard.twitch.tv/u/${esc(S.login)}/content/clips" target="_blank" rel="noopener">your Clips Manager</a>, pick <b>Clips I've created</b>, and download it there. Then open <a href="https://x3dh8.github.io/clipkit/#batch" target="_blank" rel="noopener">ClipKit Batch</a> to finish it.</div>`;
       render();
     }
   } catch (err) { toast(err.message); if (dl) dl.disabled = false; }

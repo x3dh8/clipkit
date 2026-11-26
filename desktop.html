@@ -27,8 +27,8 @@ header{display:flex;align-items:center;gap:14px;height:56px;padding:0 20px;borde
 .btn:disabled{opacity:.45;cursor:not-allowed}
 .btn.wide{width:100%;margin-top:10px}
 select{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 8px;min-height:36px;width:100%}
-main,#mview{display:grid;grid-template-columns:minmax(0,1fr) var(--pw) 340px;gap:16px;padding:16px 20px;height:calc(100vh - 56px);--pw:min(28vw,calc((100vh - 140px)*9/16))}
-@media(max-width:1150px){main,#mview{grid-template-columns:minmax(0,1fr) var(--pw);grid-template-rows:auto auto;height:auto;min-height:calc(100vh - 56px)}body{overflow:auto}aside{grid-column:1/-1;max-height:none!important}}
+main,#mview,#bview{display:grid;grid-template-columns:minmax(0,1fr) var(--pw) 340px;gap:16px;padding:16px 20px;height:calc(100vh - 56px);--pw:min(28vw,calc((100vh - 140px)*9/16))}
+@media(max-width:1150px){main,#mview,#bview{grid-template-columns:minmax(0,1fr) var(--pw);grid-template-rows:auto auto;height:auto;min-height:calc(100vh - 56px)}body{overflow:auto}aside{grid-column:1/-1;max-height:none!important}}
 .pane{display:flex;flex-direction:column;gap:10px;min-height:0}
 .label{color:var(--mute);font-size:12px;font-weight:600}
 #stageWrap{flex:1;min-height:240px;display:flex;align-items:center;justify-content:center;background:#0b0c0e;border-radius:12px;overflow:hidden}
@@ -114,6 +114,22 @@ body.busy #stage,body.busy aside section:not(.exp),body.busy .transport{pointer-
 #songStrip{width:100%;height:64px;display:block;border-radius:8px;background:#0b0c0e;cursor:pointer;margin-top:10px}
 .summary{font-size:13px;margin:0 0 4px}
 body.mbusy #mview .pane:first-child,body.mbusy #mview aside section:not(.exp),body.mbusy .tabs{pointer-events:none;opacity:.6}
+.bi{display:grid;grid-template-columns:24px 96px minmax(0,1fr);gap:10px;align-items:start;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:8px}
+.bi.now{border-color:var(--acc)}
+.bi .n{color:var(--mute);font-weight:700;text-align:center;padding-top:4px}
+.bi img,.bi .ph{width:96px;height:54px;border-radius:6px;object-fit:cover;background:#000;display:block}
+.bi .bmain{display:flex;flex-direction:column;gap:6px;min-width:0}
+.bi b{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bi input{background:#1b1d22;border:1px solid var(--line);border-radius:8px;padding:7px 9px;font-size:16px;width:100%}
+.bi small{color:var(--mute);font-size:12.5px}
+.bi .ok{color:#3ddc84;font-weight:600}
+.bi .bad{color:#ff8a93}
+.bi .acts{display:flex;gap:6px;flex-wrap:wrap}
+body.bbusy .tabs,body.bbusy #bview .bset,body.bbusy #bAdd{pointer-events:none;opacity:.6}
+a.btn{color:var(--ink)}
+a.btn.primary{color:#fff}
+#toast{#bview canvas#bout{width:100%;aspect-ratio:9/16;background:#000;border-radius:12px;display:block}
+#bview .mlist{flex:1;overflow:auto;display:flex;flex-direction:column;gap:8px;min-height:160px;background:#0b0c0e;border-radius:12px;padding:10px}
 #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#2b2f37;border:1px solid var(--line);padding:10px 16px;border-radius:10px;font-size:13.5px;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90vw}
 #toast.show{opacity:1}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -122,7 +138,7 @@ body.mbusy #mview .pane:first-child,body.mbusy #mview aside section:not(.exp),bo
 <body>
 <header>
   <div class="logo">Clip<b>Kit</b></div>
-  <div class="tabs" id="tabs"><button data-v="clip" class="on">Clip</button><button data-v="montage">Montage</button></div>
+  <div class="tabs" id="tabs"><button data-v="clip" class="on">Clip</button><button data-v="montage">Montage</button><button data-v="batch">Batch</button></div>
   <div id="fname"></div>
   <button class="btn" id="openBtn">Open clip</button>
   <input type="file" id="fileIn" accept="video/*,.mkv,.mov" hidden>
@@ -281,6 +297,38 @@ body.mbusy #mview .pane:first-child,body.mbusy #mview aside section:not(.exp),bo
       <div class="status" id="mStatus" hidden><div class="bar"><i></i></div><span></span></div>
       <a class="btn wide" id="mDl" hidden>Download again</a>
       <p class="hint">Preview and export both play in real time. Keep this tab in front.</p>
+    </section>
+  </aside>
+</main>
+<main id="bview" hidden>
+  <section class="pane">
+    <div class="label">Clips to turn into finished videos. Edit the title for each one if you like.</div>
+    <div class="mlist" id="bList"></div>
+    <div class="madd"><button class="btn primary" id="bAdd">Add clips</button><input type="file" id="bFiles" accept="video/*,.mkv,.mov" multiple hidden></div>
+  </section>
+  <section class="pane prev">
+    <div class="label">Preview (1080×1920)</div>
+    <canvas id="bout"></canvas>
+  </section>
+  <aside>
+    <section class="bset">
+      <h3>Style for every video</h3>
+      <div class="grid2" style="margin-top:0">
+        <label>Layout<select id="bLayout"><option value="fit">Fit + blur</option><option value="full">Vertical crop</option><option value="split">Facecam + game</option></select></label>
+        <label>Frame rate<select id="bFps"><option value="30">30 fps</option><option value="60" selected>60 fps</option></select></label>
+      </div>
+      <label class="chk"><input type="checkbox" id="bCaps" checked> Auto captions</label>
+      <div class="grid2"><label>Caption model<select id="bModel"><option value="Xenova/whisper-tiny.en">Fast (English)</option><option value="Xenova/whisper-base.en" selected>Accurate (English)</option><option value="Xenova/whisper-base">Any language</option></select></label>
+      <label>Title on top<select id="bHookWhen"><option value="all">Whole video</option><option value="start">First 3 seconds</option></select></label></div>
+      <label class="chk"><input type="checkbox" id="bHook" checked> Show the title on top</label>
+      <p class="hint">Captions use the font, size, color and position from the Clip tab. Vertical crop and Facecam + game use the boxes you set there too. Fit + blur works on any clip without setup.</p>
+    </section>
+    <section class="exp">
+      <h3>Make them</h3>
+      <button class="btn primary wide" id="bGo" style="margin-top:0">Make all videos</button>
+      <div class="status" id="bStatus" hidden><div class="bar"><i></i></div><span></span></div>
+      <button class="btn wide" id="bShareAll" hidden>Share all</button>
+      <p class="hint">Each video is made in real time, so 10 clips of 30 seconds take about 6 to 7 minutes including captions. Keep this tab in front.</p>
     </section>
   </aside>
 </main>
@@ -472,8 +520,7 @@ function draw() {
   renderVideo(ctx, video, S.layout, 1);
   if (S.cap.on) drawCaps(video.currentTime);
 }
-function activeGroupIndex(t) {
-  const G = S.groups;
+function activeGroupIndex(t, G = S.groups) {
   for (let i = 0; i < G.length; i++) {
     const g = G[i], nx = G[i + 1];
     const end = nx ? Math.min(nx.start, g.end + 0.4) : g.end + 0.4;
@@ -481,9 +528,10 @@ function activeGroupIndex(t) {
   }
   return -1;
 }
-function drawCaps(t) {
-  const gi = activeGroupIndex(t); if (gi < 0) return;
-  const g = S.groups[gi], c = S.cap, size = c.size, f = FONTS[c.font] || FONTS.Montserrat;
+function drawCaps(t) { drawCapsOn(ctx, S.groups, t); }
+function drawCapsOn(ctx, groups, t) {
+  const gi = activeGroupIndex(t, groups); if (gi < 0) return;
+  const g = groups[gi], c = S.cap, size = c.size, f = FONTS[c.font] || FONTS.Montserrat;
   ctx.font = `${f.w} ${size}px ${f.css}`;
   ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.lineJoin = 'round';
   const words = g.words.map((w) => ({ ...w, txt: c.upper ? w.t.toUpperCase() : w.t }));
@@ -616,6 +664,7 @@ window.addEventListener('dragleave', (e) => { if (!e.relatedTarget) drop.classLi
 window.addEventListener('drop', (e) => {
   e.preventDefault(); drop.classList.remove('over');
   const fs = Array.from(e.dataTransfer.files || []);
+  if (VIEW === 'batch') { addBatchFiles(fs); return; }
   if (VIEW === 'montage') {
     const au = fs.find((f) => /^audio\//.test(f.type) || /\.(mp3|m4a|wav|ogg|aac|flac)$/i.test(f.name));
     if (au) loadSong(au);
@@ -708,6 +757,7 @@ function capStatus(text, p) {
   $('#capStatus .bar i').style.width = (p == null ? 0 : Math.round(p * 100)) + '%';
   $('#capStatus .bar').style.display = p == null ? 'none' : 'block';
 }
+let asrStatus = (t, p) => capStatus(t, p);
 function getWorker() {
   if (worker) return worker;
   const src = $('#asrWorker').textContent;
@@ -720,9 +770,9 @@ function getWorker() {
       if (p.status === 'progress' && p.total) {
         prog[p.file] = [p.loaded, p.total];
         let l = 0, t = 0; for (const v of Object.values(prog)) { l += v[0]; t += v[1]; }
-        capStatus(`Downloading the speech model (only the first time)… ${Math.round(l / t * 100)}%`, l / t);
-      } else if (p.status === 'ready') capStatus('Model ready. Starting…', null);
-    } else if (m.type === 'listening') capStatus('Listening to your clip… a 30-second clip takes about 10–30 seconds.', null);
+        asrStatus(`Downloading the speech model (only the first time)… ${Math.round(l / t * 100)}%`, l / t);
+      } else if (p.status === 'ready') asrStatus('Model ready. Starting…', null);
+    } else if (m.type === 'listening') asrStatus('Writing captions…', null);
     else if (job) { const j = job; job = null; m.type === 'done' ? j.res(m) : j.rej(new Error(m.message)); }
   };
   worker.onerror = (e) => { if (job) { const j = job; job = null; j.rej(new Error(e.message || 'The speech model failed to load. Check your internet connection.')); } worker = null; };
@@ -969,11 +1019,12 @@ function setView(v) {
   VIEW = v;
   for (const b of $('#tabs').children) b.classList.toggle('on', b.dataset.v === v);
   $('#mview').hidden = v !== 'montage';
+  $('#bview').hidden = v !== 'batch';
   $('#empty').hidden = v !== 'clip' || !!S.file;
   $('#app').hidden = v !== 'clip' || !S.file;
-  if (v === 'montage') { video.pause(); refreshMontage(); } else { sizeStage(); drawStrip(); }
+  if (v === 'montage') { video.pause(); refreshMontage(); } else if (v === 'batch') { video.pause(); renderBList(); } else { sizeStage(); drawStrip(); }
 }
-$('#tabs').onclick = (e) => { const b = e.target.closest('button'); if (b && !M.running && !S.exporting) setView(b.dataset.v); };
+$('#tabs').onclick = (e) => { const b = e.target.closest('button'); if (b && !M.running && !S.exporting && !B.running) setView(b.dataset.v); };
 
 /* ---------- montage ---------- */
 const M = { items: [], song: null, songName: '', beats: [], bpm: 0, drop: null, songStart: 0, peaks: null, running: false, stop: false, plan: null };
@@ -1301,6 +1352,197 @@ async function runMontage(record) {
 }
 $('#mPrev').onclick = () => runMontage(false);
 $('#mExp').onclick = () => runMontage(true);
+function unlockVideo(v) { if (v.dataset.unlocked) return; v.dataset.unlocked = '1'; const pr = v.play(); if (pr && pr.catch) pr.catch(() => {}); v.pause(); }
+
+/* ---------- batch: many clips -> finished videos ---------- */
+const B = { items: [], running: false, stop: false, done: [] };
+let bid = 0;
+const bcv = $('#bout'), bctx2 = bcv.getContext('2d'); bcv.width = OW; bcv.height = OH;
+const bv = document.createElement('video'); bv.playsInline = true; bv.setAttribute('playsinline', ''); bv.preload = 'auto';
+let bvWired = false;
+function wireBatchAudio() { ensureAudio(); if (bvWired) return; bvWired = true; const src = actx.createMediaElementSource(bv); src.connect(actx.destination); src.connect(dest); }
+function cleanHook(name) {
+  let s = name.replace(/\.[^.]+$/, '').replace(/[_]+/g, ' ').replace(/\s*[-–]\s*[A-Za-z0-9]{16,}$/, '').replace(/\s{2,}/g, ' ').trim();
+  if (/^(clip|video|vid|img|mov|pxl|screen ?recording|rpreplay|trim|untitled)\b[\s\w-]*$/i.test(s) && /\d/.test(s) || /^(clip|video|untitled)$/i.test(s) || /^\d[\d\s_-]*$/.test(s)) s = '';
+  return s.slice(0, 80);
+}
+function bStatusLine(text, p) { mStatus('#bStatus', text, p); }
+async function decodePCM(file) {
+  const ac = new AudioContext({ sampleRate: 16000 });
+  try {
+    const ab = await ac.decodeAudioData(await file.arrayBuffer());
+    const n = ab.length, ch = ab.numberOfChannels, out = new Float32Array(n);
+    for (let c = 0; c < ch; c++) { const d = ab.getChannelData(c); for (let i = 0; i < n; i++) out[i] += d[i] / ch; }
+    return out;
+  } finally { ac.close(); }
+}
+function parseWords(res, off, len) {
+  const words = [];
+  for (const c of res.chunks) {
+    const s = c.timestamp && c.timestamp[0] != null ? c.timestamp[0] : 0, e = c.timestamp && c.timestamp[1] != null ? c.timestamp[1] : len;
+    const toks = String(c.text).trim().split(/\s+/).filter((t) => t && !/^[\[(♪*]|[\])♪*]$/.test(t));
+    if (!toks.length) continue;
+    const d = Math.max(0.05, e - s) / toks.length;
+    toks.forEach((t, k) => words.push({ t, s: off + s + k * d, e: off + s + (k + 1) * d }));
+  }
+  if (res.mode === 'word' && words.length > 3 && new Set(words.map((w) => w.s.toFixed(2))).size < words.length / 3) {
+    const d = len / words.length; words.forEach((w, k) => { w.s = off + k * d; w.e = off + (k + 1) * d; });
+  }
+  return words;
+}
+async function transcribeFile(file, model, onStatus) {
+  let audio;
+  try { audio = await decodePCM(file); } catch (e) { return []; }
+  const len = audio.length / 16000;
+  asrStatus = onStatus;
+  try {
+    const res = await new Promise((resolve, reject) => { job = { res: resolve, rej: reject }; getWorker().postMessage({ audio, model }, [audio.buffer]); });
+    return parseWords(res, 0, len);
+  } finally { asrStatus = capStatus; }
+}
+function drawHook(c, text) {
+  if (!text) return;
+  let size = 66; const maxW = OW * 0.8, pad = 30;
+  const wrap = () => {
+    c.font = `900 ${size}px "Montserrat", sans-serif`;
+    const lines = [[]]; let lw = 0; const sp = c.measureText(' ').width;
+    for (const w of text.split(/\s+/)) { const mw = c.measureText(w).width, add = (lines[lines.length - 1].length ? sp : 0) + mw; if (lines[lines.length - 1].length && lw + add > maxW) { lines.push([w]); lw = mw; } else { lines[lines.length - 1].push(w); lw += add; } }
+    return lines.map((l) => l.join(' '));
+  };
+  let lines = wrap(); while (lines.length > 3 && size > 40) { size -= 6; lines = wrap(); }
+  const lh = size * 1.15, w = Math.min(OW * 0.9, Math.max(...lines.map((l) => c.measureText(l).width)) + pad * 2), h = lines.length * lh + pad * 1.4;
+  const x = (OW - w) / 2, y = OH * 0.09;
+  c.save();
+  c.shadowColor = 'rgba(0,0,0,.35)'; c.shadowBlur = 24; c.shadowOffsetY = 6;
+  c.fillStyle = '#fff'; c.beginPath();
+  if (c.roundRect) c.roundRect(x, y, w, h, 22); else c.rect(x, y, w, h);
+  c.fill(); c.shadowColor = 'transparent';
+  c.fillStyle = '#111'; c.textAlign = 'center'; c.textBaseline = 'middle';
+  lines.forEach((l, i) => c.fillText(l, OW / 2, y + pad * 0.7 + lh * (i + 0.5)));
+  c.restore();
+}
+function bOpts() { return { layout: $('#bLayout').value, caps: $('#bCaps').checked, hook: $('#bHook').checked, hookWhen: $('#bHookWhen').value, fps: +$('#bFps').value, model: $('#bModel').value }; }
+function drawBatchFrame(it, t, o) {
+  renderVideo(bctx2, bv, o.layout, 1);
+  if (o.caps && it.groups && it.groups.length) drawCapsOn(bctx2, it.groups, t);
+  if (o.hook && (o.hookWhen === 'all' || t < 3.2)) drawHook(bctx2, it.hook);
+}
+async function addBatchFiles(files) {
+  const list = files.filter((f) => /^video\//.test(f.type) || /\.(mp4|mov|webm|mkv|m4v)$/i.test(f.name));
+  for (const f of list) {
+    const it = { id: ++bid, file: f, url: URL.createObjectURL(f), name: f.name, hook: cleanHook(f.name), status: 'waiting', msg: '' };
+    B.items.push(it);
+    thumbAt(it.url, 1).then((th) => { it.thumb = th; renderBList(); });
+  }
+  renderBList();
+}
+function renderBList() {
+  const L = $('#bList');
+  $('#bGo').disabled = B.running ? false : !B.items.some((i) => i.status !== 'done');
+  $('#bShareAll').hidden = !(B.items.filter((i) => i.out).length > 1 && navigator.canShare && navigator.canShare({ files: B.items.filter((i) => i.out).map((i) => i.out) }));
+  if (!B.items.length) { L.innerHTML = '<div class="mempty"><b>No clips yet</b>Add the clips you downloaded. Each one becomes a finished vertical video with captions and a title on top.</div>'; return; }
+  L.innerHTML = B.items.map((it, i) => {
+    const st = it.status === 'done' ? `<span class="ok">Done · ${(it.out.size / 1048576).toFixed(1)} MB</span>${it.note ? ' · ' + esc(it.note) : ''}` : it.status === 'working' ? esc(it.msg || 'Working…') : it.status === 'failed' ? `<span class="bad">${esc(it.msg)}</span>` : 'Waiting';
+    const acts = it.status === 'done'
+      ? `${navigator.canShare && navigator.canShare({ files: [it.out] }) ? `<button class="btn mini primary" data-share="${i}">Save or share</button>` : ''}<a class="btn mini" href="${it.outUrl}" download="${esc(it.out.name)}">Download</a>`
+      : '';
+    return `<div class="bi${it.status === 'working' ? ' now' : ''}"><span class="n">${i + 1}</span>${it.thumb ? `<img src="${it.thumb}" alt="">` : '<span class="ph"></span>'}<span class="bmain"><b>${esc(it.name)}</b><input data-hook="${i}" value="${esc(it.hook)}" placeholder="Title on top (optional)" aria-label="Title for clip ${i + 1}"${B.running ? ' disabled' : ''}><small>${st}</small><span class="acts">${acts}${B.running ? '' : `<button class="btn mini" data-brm="${i}" aria-label="Remove">✕</button>`}</span></span></div>`;
+  }).join('');
+}
+$('#bList').addEventListener('input', (e) => { const i = e.target.dataset.hook; if (i != null) { B.items[+i].hook = e.target.value; if (B.items[+i].status === 'done') { B.items[+i].status = 'waiting'; } } });
+$('#bList').addEventListener('change', () => renderBList());
+$('#bList').addEventListener('click', async (e) => {
+  const sh = e.target.closest('[data-share]'), rm = e.target.closest('[data-brm]');
+  if (sh) { const it = B.items[+sh.dataset.share]; try { await navigator.share({ files: [it.out], title: it.out.name }); } catch (err) { if (err.name !== 'AbortError') toast("Couldn't open sharing. Use Download instead."); } }
+  if (rm && !B.running) { const [it] = B.items.splice(+rm.dataset.brm, 1); URL.revokeObjectURL(it.url); if (it.outUrl) URL.revokeObjectURL(it.outUrl); renderBList(); }
+});
+$('#bShareAll').onclick = async () => {
+  const files = B.items.filter((i) => i.out).map((i) => i.out);
+  try { await navigator.share({ files, title: 'ClipKit videos' }); } catch (err) { if (err.name !== 'AbortError') toast("Couldn't share them all at once. Save them one by one."); }
+};
+$('#bAdd').onclick = () => $('#bFiles').click();
+$('#bFiles').onchange = (e) => { const fs = Array.from(e.target.files); e.target.value = ''; addBatchFiles(fs); };
+function seekEl(v, t) { return new Promise((r) => { const to = setTimeout(r, 3000); v.addEventListener('seeked', () => { clearTimeout(to); r(); }, { once: true }); v.currentTime = t; }); }
+async function makeOne(it, o, idx, total) {
+  it.status = 'working'; it.msg = 'Loading…'; it.note = ''; renderBList();
+  if (bv.src !== it.url) { bv.src = it.url; await new Promise((r, j) => { bv.onloadeddata = r; bv.onerror = () => j(new Error("Couldn't open this video.")); }); }
+  const prefix = `Clip ${idx + 1} of ${total}: `;
+  it.groups = [];
+  if (o.caps) {
+    try {
+      const words = await transcribeFile(it.file, o.model, (text, p) => { it.msg = text; bStatusLine(prefix + text, p); renderBListMsg(it); });
+      it.groups = buildGroups(words);
+      it.note = words.length ? '' : 'no speech found, so no captions';
+    } catch (err) { it.groups = []; it.note = 'captions failed, made it without them'; }
+  }
+  if (B.stop) throw new Error('stopped');
+  await seekEl(bv, 0); drawBatchFrame(it, 0, o);
+  const mime = pickMime();
+  if (!mime || !bcv.captureStream) throw new Error("This browser can't record video.");
+  const stream = bcv.captureStream(o.fps);
+  dest.stream.getAudioTracks().forEach((tr) => stream.addTrack(tr));
+  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 10e6, audioBitsPerSecond: 192000 });
+  const parts = []; rec.ondataavailable = (e) => { if (e.data.size) parts.push(e.data); };
+  rec.start(500);
+  await bv.play();
+  const dur = bv.duration || 60;
+  await new Promise((res) => {
+    const f = () => {
+      const t = bv.currentTime;
+      drawBatchFrame(it, t, o);
+      it.msg = `Exporting… ${Math.round(t / dur * 100)}%`; renderBListMsg(it);
+      bStatusLine(prefix + it.msg, (idx + t / dur) / total);
+      if (bv.ended || B.stop || bv.paused && t > 0.1) { res(); return; }
+      requestAnimationFrame(f);
+    };
+    requestAnimationFrame(f);
+  });
+  bv.pause();
+  await new Promise((r) => { rec.onstop = r; rec.stop(); });
+  stream.getVideoTracks().forEach((t) => t.stop());
+  if (B.stop) throw new Error('stopped');
+  const type = mime.split(';')[0], ext = type === 'video/mp4' ? 'mp4' : 'webm';
+  const base = (it.hook || it.name.replace(/\.[^.]+$/, '')).replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_').slice(0, 50) || 'clip';
+  it.out = new File(parts, `${base}_ClipKit.${ext}`, { type });
+  if (it.outUrl) URL.revokeObjectURL(it.outUrl);
+  it.outUrl = URL.createObjectURL(it.out);
+  it.status = 'done'; it.msg = '';
+}
+function renderBListMsg(it) {
+  const i = B.items.indexOf(it), row = $('#bList').children[i];
+  const sm = row && row.querySelector('small'); if (sm) sm.textContent = it.msg;
+}
+$('#bGo').onclick = async () => {
+  if (B.running) { B.stop = true; return; }
+  const todo = B.items.filter((i) => i.status !== 'done');
+  if (!todo.length) return;
+  ensureAudio(); actx.resume();
+  if (bv.src !== todo[0].url) bv.src = todo[0].url;
+  unlockVideo(bv);
+  wireBatchAudio(); video.pause();
+  B.running = true; B.stop = false; document.body.classList.add('bbusy');
+  $('#bGo').textContent = 'Stop'; renderBList();
+  const o = bOpts();
+  try { localStorage.setItem('clipkit-batch', JSON.stringify(o)); } catch (e) {}
+  let ok = 0;
+  for (let k = 0; k < todo.length; k++) {
+    const it = todo[k];
+    try { await makeOne(it, o, k, todo.length); ok++; }
+    catch (err) {
+      bv.pause();
+      if (err.message === 'stopped') { it.status = 'waiting'; it.msg = ''; break; }
+      it.status = 'failed'; it.msg = err.message;
+    }
+    renderBList();
+  }
+  const stopped = B.stop;
+  B.running = false; B.stop = false; document.body.classList.remove('bbusy');
+  $('#bGo').textContent = 'Make all videos'; renderBList();
+  bStatusLine(stopped ? `Stopped. ${ok} video${ok === 1 ? '' : 's'} made.` : `Done: ${ok} of ${todo.length} video${todo.length === 1 ? '' : 's'} made. Save them below.`, stopped ? null : 1);
+};
+try { const o = JSON.parse(localStorage.getItem('clipkit-batch') || 'null'); if (o) { $('#bLayout').value = o.layout; $('#bCaps').checked = o.caps; $('#bHook').checked = o.hook; $('#bHookWhen').value = o.hookWhen; $('#bFps').value = String(o.fps); $('#bModel').value = o.model; } } catch (e) {}
+renderBList();
+if (location.hash === '#batch') setTimeout(() => setView('batch'), 0);
 
 /* ---------- export ---------- */
 let cancelReq = false;
