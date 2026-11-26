@@ -613,7 +613,7 @@ export class Watcher {
     const d = j.data && j.data[0];
     if (!d) throw new Error('Twitch did not return a clip.');
     const rec = { id: d.id, title, edit_url: d.edit_url, url: `https://clips.twitch.tv/${d.id}`, broadcaster_id: s.id, login: s.login, name: s.name,
-      at: this.now(), why, top: (top || []).map(([t, n]) => `${t} ×${n}`), game: L.game || '', streamKey: L.since || '', status: 'processing', manual: !!manual };
+      at: this.now(), why, top: (top || []).map(([t, n]) => `${t} ×${n}`), game: L.game || '', streamTitle: L.title || '', streamKey: L.since || '', status: 'processing', manual: !!manual };
     this.clips.unshift(rec); if (this.clips.length > 200) this.clips.length = 200;
     await this.st.put('clips', this.clips);
     this.addLog(`Clipped ${s.name}: ${why}.`);
@@ -900,8 +900,8 @@ export class Watcher {
   }
   async writeCopy(items) {
     if (!this.env || !this.env.AI) return null;
-    const list = items.map((it, i) => `${i + 1}. Streamer: ${it.name}${it.game ? ' (playing ' + it.game + ')' : ''}. Clip title: "${it.title}". Why it's good: ${it.why}.${it.chat ? ' Chat was spamming: ' + it.chat + '.' : ''}`).join('\n');
-    const sys = 'You write titles and descriptions for YouTube Shorts made from Twitch stream clips. They must follow YouTube\'s rules. Titles: under 70 characters, a curiosity hook that makes people want to watch, names the streamer, sounds like a person wrote it, no emojis, no ALL CAPS words except a streamer name. NEVER invent details that are not in the information given, and never promise something the clip may not show (no fake drama, no "gone wrong", no "banned", no "you won\'t believe"); if the info is thin, keep the title general and honest. Never insult, mock or sexualize anyone, never use slurs, and never name or hint at gambling or betting sites, promo codes or sponsors. Description: one or two short sentences, no links. Hashtags: 3 to 5, each directly about this clip (the streamer, the game, the kind of moment), always including #shorts; never trending tags that are unrelated. Angle: one short idea for the creator\'s OWN commentary to add on top (a caption or voiceover line that explains, reacts to or gives context to the moment), without inventing what happens.';
+    const list = items.map((it, i) => `${i + 1}. Streamer: ${it.name}${it.game ? ' (in ' + it.game + ')' : ''}.${it.streamTitle ? ' Stream title: "' + it.streamTitle.slice(0, 140) + '".' : ''} Clip title: "${it.title}". Why it's good: ${it.why}.${it.chat ? ' Chat was spamming: ' + it.chat + '.' : ''}${it.scene ? ' One still frame from the clip shows: ' + it.scene + '.' : ''}`).join('\n');
+    const sys = 'You write titles and descriptions for YouTube Shorts made from Twitch stream clips. They must follow YouTube\'s rules. Titles: under 70 characters, a curiosity hook that makes people want to watch, names the streamer, sounds like a person wrote it, no emojis, no ALL CAPS words except a streamer name. Use the concrete details you are given (what the frame shows, the stream title, what chat reacted with) to make the title specific, but NEVER invent details that are not in the information given; the still frame is one moment and may not show the key part, so describe the setting or situation, not an outcome you cannot see; and never promise something the clip may not show (no fake drama, no "gone wrong", no "banned", no "you won\'t believe"); if the info is thin, keep the title general and honest. Never insult, mock or sexualize anyone, never use slurs, and never name or hint at gambling or betting sites, promo codes or sponsors. Description: one or two short sentences, no links. Hashtags: 3 to 5, each directly about this clip (the streamer, the game, the kind of moment), always including #shorts; never trending tags that are unrelated. Angle: one short idea for the creator\'s OWN commentary to add on top (a caption or voiceover line that explains, reacts to or gives context to the moment), without inventing what happens.';
     const user = `Write copy for each clip. Give 3 different title options per clip.\n\n${list}`;
     const schema = { type: 'object', properties: { clips: { type: 'array', items: { type: 'object', properties: { n: { type: 'integer' }, titles: { type: 'array', items: { type: 'string' } }, description: { type: 'string' }, hashtags: { type: 'array', items: { type: 'string' } }, angle: { type: 'string' } }, required: ['n', 'titles', 'description', 'hashtags', 'angle'] } } }, required: ['clips'] };
     try {
@@ -909,6 +909,17 @@ export class Watcher {
       const out = typeof r.response === 'string' ? JSON.parse(r.response) : r.response;
       return out && Array.isArray(out.clips) ? out.clips : null;
     } catch (e) { return null; }
+  }
+  // Looks at the clip's thumbnail frame and says what's in it (no names)
+  async describeFrame(url) {
+    if (!this.env || !this.env.AI || !/^https:\/\//.test(url || '')) return '';
+    try {
+      const r = await Promise.race([
+        this.env.AI.run('@cf/moondream/moondream3.1-9B-A2B', { task: 'query', image: url, question: 'This is a frame from a livestream. In one short sentence, say what is happening: the setting, what the person is doing or wearing, and what game or scene is on screen. Do not guess anyone\'s name. Do not mention the stream overlay, chat box or webcam border.' }),
+        new Promise((_, no) => setTimeout(() => no(new Error('slow')), 20000))]);
+      const t = typeof r === 'string' ? r : r && (r.answer || r.caption || r.response || r.result || r.text || r.description);
+      return String(t || '').replace(/\s+/g, ' ').trim().slice(0, 220);
+    } catch (e) { return ''; }
   }
   // Llama Guard: true = looks fine, false = break a YouTube rule, null = couldn't check
   async guard(text) {
@@ -951,13 +962,13 @@ export class Watcher {
     for (const c of mine) {
       const why = this.skipWhy(meta, { bid: c.broadcaster_id, game: c.game, title: c.title });
       if (why) { skipped.push(why); continue; }
-      items.push({ kind: 'mine', id: c.id, name: c.name, login: c.login, title: c.title || 'stream moment', why: c.why, chat: (c.top || []).join(', '), game: c.game || '', bid: c.broadcaster_id, url: c.url, thumb: c.thumb, score: 70 + (c.manual ? 5 : 0), ready: editor.has(c.broadcaster_id) });
+      items.push({ kind: 'mine', id: c.id, name: c.name, login: c.login, title: c.title || 'stream moment', why: c.why, chat: (c.top || []).join(', '), game: c.game || '', streamTitle: c.streamTitle || '', bid: c.broadcaster_id, url: c.url, thumb: c.thumb, score: 70 + (c.manual ? 5 : 0), ready: editor.has(c.broadcaster_id) });
     }
     // 2) the best moments other viewers clipped (rule-breaking clips never count)
     const bad = new Set();
     for (const c of raw) { const why = this.skipWhy(meta, { bid: c.broadcaster_id, game: meta.games[c.game_id], title: c.title }); if (why) { bad.add(c.id); if (Date.parse(c.created_at) >= since) skipped.push(why); } }
     const loginOf = (id) => (this.cfg.streamers.find((s) => s.id === id) || {}).login || '';
-    const toItem = (m) => { const c = m.best, off = c.vod_offset; return { kind: 'pick', id: c.id, name: c.broadcaster_name, login: loginOf(c.broadcaster_id), title: c.title, why: m.why.join(', ') || `${numFmt(m.views)} views`, chat: '', game: meta.games[c.game_id] || '', bid: c.broadcaster_id, url: c.url, thumb: c.thumbnail_url, score: m.score,
+    const toItem = (m) => { const c = m.best, off = c.vod_offset; return { kind: 'pick', id: c.id, name: c.broadcaster_name, login: loginOf(c.broadcaster_id), title: c.title, why: m.why.join(', ') || `${numFmt(m.views)} views`, chat: '', game: meta.games[c.game_id] || '', vid: c.video_id || '', bid: c.broadcaster_id, url: c.url, thumb: c.thumbnail_url, score: m.score,
       vod: c.video_id && off != null ? `https://www.twitch.tv/videos/${c.video_id}?t=${Math.floor(off / 3600)}h${Math.floor(off % 3600 / 60)}m${Math.floor(off % 60)}s` : '', ready: false, editor: editor.has(c.broadcaster_id) }; };
     const checked = new Map(); // clip id -> guard verdict on its title
     const guardItems = async (list) => { await Promise.all(list.filter((it) => !checked.has(it.id)).map(async (it) => checked.set(it.id, await this.guard(`Twitch clip title: ${it.title}`)))); };
@@ -982,6 +993,11 @@ export class Watcher {
       this.queue = { at: this.now(), items: [] }; await this.st.put('queue', this.queue);
       return { ok: true, count: 0 };
     }
+    // more to go on: the stream's title and what the clip's frame shows
+    const vids = [...new Set(chosen.filter((it) => it.vid && !it.streamTitle).map((it) => it.vid))];
+    if (vids.length) { try { const vt = {}; for (const v of (await this.helix('/videos', { query: { id: vids } })).data || []) vt[v.id] = v.title; chosen.forEach((it) => { if (!it.streamTitle && vt[it.vid]) it.streamTitle = vt[it.vid]; }); } catch (e) {} }
+    const scenes = await Promise.all(chosen.map((it) => this.describeFrame(it.thumb)));
+    chosen.forEach((it, i) => { it.scene = scenes[i]; });
     const copy = await this.writeCopy(chosen);
     const times = this.slotTimes(chosen.length);
     const clean = (t) => String(t || '').replace(BAD_WORDS, '').replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim();
