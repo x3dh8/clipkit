@@ -551,7 +551,8 @@ function renderVideo(c, el, layout, zoom) {
     c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high';
     c.drawImage(bg, 0, 0, OW, OH);
     c.fillStyle = 'rgba(0,0,0,.38)'; c.fillRect(0, 0, OW, OH);
-    const dw = OW * S.zoom, dh = dw / va;
+    const z = va < sa * 1.15 ? 1 : S.zoom; // already tall: show all of it
+    let dw = OW * z, dh = dw / va; if (dh > OH) { dh = OH; dw = dh * va; }
     c.drawImage(el, (OW - dw) / 2, (OH - dh) / 2, dw, dh);
   } else {
     for (const g of regions(layout)) {
@@ -569,7 +570,7 @@ function activeGroupIndex(t, G = S.groups) {
   for (let i = 0; i < G.length; i++) {
     const g = G[i], nx = G[i + 1];
     const end = nx ? Math.min(nx.start, g.end + 0.4) : g.end + 0.4;
-    if (t >= g.start && t < Math.max(end, g.end)) return i;
+    if (t >= g.start && t < Math.max(end, g.start + 0.15)) return i;
   }
   return -1;
 }
@@ -581,27 +582,29 @@ function drawCapsOn(ctx, groups, t) {
   ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.lineJoin = 'round';
   const words = g.words.map((w) => ({ ...w, txt: c.upper ? w.t.toUpperCase() : w.t }));
   const space = ctx.measureText(' ').width, maxW = OW * 0.86;
+  let ai = -1; words.forEach((w, i) => { if (t >= w.s) ai = i; });
+  const POP = 1.12, act = (w) => words.indexOf(w) === ai && c.hi !== '#ffffff';
   const lines = [[]]; let lw = 0;
   for (const w of words) {
     w.mw = ctx.measureText(w.txt).width;
     const cur = lines[lines.length - 1], add = (cur.length ? space : 0) + w.mw;
     if (cur.length && lw + add > maxW) { lines.push([w]); lw = w.mw; } else { cur.push(w); lw += add; }
   }
-  let ai = -1; words.forEach((w, i) => { if (t >= w.s) ai = i; });
   const lh = size * 1.12, y0 = OH * c.y - (lines.length - 1) * lh / 2;
   lines.forEach((L, li) => {
-    const tw = L.reduce((a, w) => a + w.mw, 0) + space * (L.length - 1);
+    const adv = (w) => w.mw * (act(w) ? POP : 1);
+    const tw = L.reduce((a, w) => a + adv(w), 0) + space * (L.length - 1);
     let x = (OW - tw) / 2; const y = y0 + li * lh;
     for (const w of L) {
-      const act = words.indexOf(w) === ai && c.hi !== '#ffffff';
-      ctx.save(); ctx.translate(x + w.mw / 2, y);
-      if (act) ctx.scale(1.12, 1.12);
+      const on = act(w);
+      ctx.save(); ctx.translate(x + adv(w) / 2, y);
+      if (on) ctx.scale(POP, POP);
       ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = size * 0.18; ctx.shadowOffsetY = size * 0.05;
       ctx.lineWidth = size * 0.2; ctx.strokeStyle = '#000'; ctx.strokeText(w.txt, -w.mw / 2, 0);
       ctx.shadowColor = 'transparent';
-      ctx.fillStyle = act ? c.hi : '#fff'; ctx.fillText(w.txt, -w.mw / 2, 0);
+      ctx.fillStyle = on ? c.hi : '#fff'; ctx.fillText(w.txt, -w.mw / 2, 0);
       ctx.restore();
-      x += w.mw + space;
+      x += adv(w) + space;
     }
   });
 }
@@ -830,6 +833,37 @@ function getWorker() {
   worker.onerror = (e) => { if (job) { const j = job; job = null; j.rej(new Error(e.message || 'The speech model failed to load. Check your internet connection.')); } worker = null; };
   return worker;
 }
+// Words never stay on screen longer than they're said
+function fixTimes(words) {
+  words.sort((a, b) => a.s - b.s);
+  words.forEach((w, i) => {
+    const nx = words[i + 1];
+    w.e = Math.min(w.e, w.s + 0.9 + w.t.length * 0.03);
+    if (nx && w.e > nx.s) w.e = Math.max(w.s + 0.05, nx.s);
+    if (w.e <= w.s) w.e = w.s + 0.2;
+  });
+  return words;
+}
+// Captions from the big Whisper model on your auto clipper (much better with game noise). null = not available
+async function serverWords(pcm, off, onStatus) {
+  const c = typeof acConf === 'function' ? acConf() : null; if (!c) return null;
+  try {
+    const CH = 180 * 16000, words = [];
+    for (let k = 0; k * CH < pcm.length; k++) {
+      onStatus && onStatus('Writing captions with the big AI…', k * CH / pcm.length);
+      const part = pcm.subarray(k * CH, Math.min(pcm.length, (k + 1) * CH));
+      const r = await fetch(c.origin + '/api/ai/transcribe?lang=en', { method: 'POST', headers: { 'x-clipkit-key': c.key, 'content-type': 'audio/wav' }, body: wavFrom(part) });
+      if (!r.ok) return null;
+      const j = await r.json(), o = off + k * 180;
+      for (const sg of j.segments || []) {
+        const ws = sg.words && sg.words.length ? sg.words.map((w) => ({ t: w.w, s: w.s, e: w.e }))
+          : (() => { const toks = sg.text.split(/\s+/).filter(Boolean), d = Math.max(0.05, sg.end - sg.start) / toks.length; return toks.map((t, i) => ({ t, s: sg.start + i * d, e: sg.start + (i + 1) * d })); })();
+        for (const w of ws) { const t = String(w.t).trim(); if (t && !/^[\[(♪*]|[\])♪*]$/.test(t)) words.push({ t, s: o + w.s, e: o + w.e }); }
+      }
+    }
+    return fixTimes(words);
+  } catch (e) { return null; }
+}
 function cleanWord(t) { return t.replace(/^\s+|\s+$/g, ''); }
 $('#capBtn').onclick = async () => {
   if (!S.file || job) return;
@@ -839,6 +873,12 @@ $('#capBtn').onclick = async () => {
     let audio;
     try { audio = await getPCM(); } catch (e) { throw new Error("This clip has no audio track I can read, so there's nothing to caption."); }
     const off = S.inT, slice = audio.slice(Math.floor(S.inT * 16000), Math.ceil(S.outT * 16000));
+    const big = await serverWords(slice, off, capStatus);
+    if (big && big.length) {
+      S.words = big; S.groups = buildGroups(big); renderCapList(); draw();
+      capStatus(`Done: ${big.length} words, written by the big AI on your auto clipper. Click any line below to fix it.`, null);
+      return;
+    }
     const res = await new Promise((resolve, reject) => { job = { res: resolve, rej: reject }; getWorker().postMessage({ audio: slice, model: $('#model').value }, [slice.buffer]); });
     const words = [], len = S.outT - S.inT;
     for (const c of res.chunks) {
@@ -852,8 +892,9 @@ $('#capBtn').onclick = async () => {
     if (res.mode === 'word' && words.length > 3 && new Set(words.map((w) => w.s.toFixed(2))).size < words.length / 3) {
       const d = len / words.length; words.forEach((w, k) => { w.s = off + k * d; w.e = off + (k + 1) * d; }); res.mode = 'chunk';
     }
+    fixTimes(words);
     S.words = words; S.groups = buildGroups(words); renderCapList(); draw();
-    capStatus(`Done: ${words.length} words. Click any line below to fix it.` + (res.mode === 'chunk' ? ' (Word timing is approximate for this clip.)' : ''), null);
+    capStatus(`Done: ${words.length} words. Click any line below to fix it.` + (res.mode === 'chunk' ? ' (Word timing is approximate for this clip.)' : '') + (acConf() ? '' : ' Tip: connect your auto clipper (Batch tab) for much more accurate captions.'), null);
   } catch (err) {
     capStatus('Captions failed: ' + err.message, null);
   } finally { btn.disabled = false; }
@@ -1450,10 +1491,12 @@ async function transcribeFile(file, model, onStatus) {
   let audio;
   try { audio = await decodePCM(file); } catch (e) { return []; }
   const len = audio.length / 16000;
+  const big = await serverWords(audio, 0, onStatus);
+  if (big && big.length) return big;
   asrStatus = onStatus;
   try {
     const res = await new Promise((resolve, reject) => { job = { res: resolve, rej: reject }; getWorker().postMessage({ audio, model }, [audio.buffer]); });
-    return parseWords(res, 0, len);
+    return fixTimes(parseWords(res, 0, len));
   } finally { asrStatus = capStatus; }
 }
 function drawHook(c, text) {
