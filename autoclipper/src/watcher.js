@@ -787,10 +787,8 @@ export class Watcher {
   async aiTranscribe(buf, lang, engine, ctype) {
     if (!buf || buf.byteLength < 100) throw new Error('No audio was sent.');
     if (buf.byteLength > 25 * 1024 * 1024) throw new Error('Audio piece too big.');
-    if (engine !== 'whisper') {
-      // Deepgram Nova-3: best with game noise and casual talk. Falls back to Whisper if it fails.
-      try { return await this.novaTranscribe(buf, lang, ctype); } catch (e) { this.lastNovaErr = String(e && e.message || e).slice(0, 300); if (engine === 'nova') throw e; }
-    }
+    // Whisper large (with a casual-speech prompt) tested best on real stream audio; Nova-3 only when asked for
+    if (engine === 'nova') return await this.novaTranscribe(buf, lang, ctype);
     const bytes = new Uint8Array(buf); let bin = '';
     for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
     const opts = { audio: btoa(bin), vad_filter: true, condition_on_previous_text: false, initial_prompt: "Umm, like, I'm gonna keep it real, bro. Nah, he's wildin'." };
