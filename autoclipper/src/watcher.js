@@ -252,6 +252,18 @@ export class Watcher {
         await this.discord({ content: '✅ ClipKit Auto is connected. New clips and your morning picks will show up here.' });
         return json({ ok: true });
       }
+      if (path === '/api/discord/post' && method === 'POST') {
+        // used by the scheduled X / Reddit checks to send their report
+        if (!this.cfg.discord) return json({ error: 'Add a Discord webhook link first.' }, 400);
+        const content = String(body.content || '').slice(0, 2000);
+        const embeds = (Array.isArray(body.embeds) ? body.embeds : []).slice(0, 10).map((e) => ({
+          title: String(e.title || '').slice(0, 250) || undefined, url: /^https:\/\//.test(e.url || '') ? e.url : undefined,
+          description: String(e.description || '').slice(0, 1500) || undefined, color: 0x4fd8ff }));
+        if (!content && !embeds.length) return json({ error: 'Nothing to send.' }, 400);
+        await this.discord({ username: 'ClipKit Scout', content: content || undefined, embeds });
+        this.addLog('Sent a scout report to Discord.');
+        return json({ ok: true });
+      }
       if (path === '/api/digest/now' && method === 'POST') {
         if (!this.cfg.discord) return json({ error: 'Add a Discord webhook link first.' }, 400);
         return json(await this.sendDigest(true));
