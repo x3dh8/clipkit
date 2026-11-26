@@ -4,7 +4,9 @@
   "compatibility_date": "2025-09-01",
   "workers_dev": true,
   "durable_objects": {
-    "bindings": [{ "name": "WATCHER", "class_name": "Watcher" }]
+    "bindings": [{ "name": "WATCHER", "class_name": "Watcher" }],
+    // Pick up new code within 20 s of a deploy instead of up to 5 min
+    "code_update_strategy": { "mode": "deferred", "max_delay": 20 }
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Watcher"] }],
   "rules": [{ "type": "Text", "globs": ["**/*.html"], "fallthrough": true }],
