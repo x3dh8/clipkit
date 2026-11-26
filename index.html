@@ -236,6 +236,10 @@ body.mmbusy .tabs,body.mmbusy #mmSettings,body.mmbusy #mmPick{pointer-events:non
     <p class="hint">Fast is best on a phone. The first time, it downloads a speech model (about 40 MB), so use Wi-Fi.</p>
     <div class="status" id="capStatus" hidden><div class="bar"><i></i></div><span></span></div>
     <label class="chk"><input type="checkbox" id="capOn" checked> Show captions</label>
+    <label>Clip already has Twitch captions?<select id="twCap"><option value="none">No</option><option value="keep">Yes: keep Twitch's, hide mine</option><option value="cover">Yes: cover Twitch's with mine</option></select></label>
+    <label class="row" id="twYRow" hidden>Cover at <input type="range" id="twY" min="10" max="95" value="76"><span class="v" id="twYV"></span></label>
+    <label class="row" id="twHRow" hidden>Cover height <input type="range" id="twH" min="5" max="25" value="11"><span class="v" id="twHV"></span></label>
+    <p class="hint" id="twHint" hidden>Slide the blurred band until Twitch's captions are hidden. Your captions sit on top of it.</p>
     <div class="grid2">
       <label>Font<select id="font"><option value="Montserrat">Montserrat</option><option value="Anton">Anton</option><option value="Lilita">Lilita One</option></select></label>
       <label>Words at a time<select id="per"><option>1</option><option>2</option><option selected>3</option><option>4</option></select></label>
@@ -439,6 +443,7 @@ const S = {
   file: null, vw: 16, vh: 9, dur: 0, inT: 0, outT: 0,
   layout: 'full', split: 0.38, zoom: 1.15,
   boxes: {},
+  tw: { mode: 'none', y: 0.76, h: 0.11 },
   cap: { on: true, font: 'Montserrat', size: 86, y: 0.7, per: 3, hi: '#ffd23f', upper: true, yTouched: false },
   words: [], groups: [], exporting: false
 };
@@ -562,8 +567,22 @@ function renderVideo(c, el, layout, zoom) {
   }
   c.restore();
 }
+// Blurs the strip where Twitch burned its captions in, so ours can replace them
+const twBuf = document.createElement('canvas');
+function coverTwitchCaps(c) {
+  if (S.tw.mode !== 'cover') return;
+  const h = Math.round(OH * S.tw.h), y = Math.round(Math.min(OH - h, Math.max(0, OH * S.tw.y - h / 2)));
+  twBuf.width = Math.max(8, Math.round(OW / 48)); twBuf.height = Math.max(2, Math.round(h / 48));
+  const b = twBuf.getContext('2d'); b.imageSmoothingEnabled = true; b.imageSmoothingQuality = 'high';
+  b.drawImage(c.canvas, 0, y, OW, h, 0, 0, twBuf.width, twBuf.height);
+  c.save(); c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high';
+  c.drawImage(twBuf, 0, 0, twBuf.width, twBuf.height, 0, y, OW, h);
+  c.fillStyle = 'rgba(0,0,0,.3)'; c.fillRect(0, y, OW, h);
+  c.restore();
+}
 function draw() {
   renderVideo(ctx, video, S.layout, 1);
+  coverTwitchCaps(ctx);
   if (S.cap.on) drawCaps(video.currentTime);
 }
 function activeGroupIndex(t, G = S.groups) {
@@ -758,6 +777,21 @@ function syncCapUI() {
 syncCapUI();
 const redraw = () => { if (video.paused) draw(); saveStyle(); };
 $('#capOn').onchange = (e) => { S.cap.on = e.target.checked; redraw(); };
+function syncTw() {
+  const m = S.tw.mode, cov = m === 'cover';
+  $('#twCap').value = m; $('#twYRow').hidden = $('#twHRow').hidden = $('#twHint').hidden = !cov;
+  $('#twY').value = Math.round(S.tw.y * 100); $('#twYV').textContent = Math.round(S.tw.y * 100) + '%';
+  $('#twH').value = Math.round(S.tw.h * 100); $('#twHV').textContent = Math.round(S.tw.h * 100) + '%';
+}
+$('#twCap').onchange = (e) => {
+  S.tw.mode = e.target.value;
+  if (S.tw.mode === 'keep') S.cap.on = false;
+  else { S.cap.on = true; if (S.tw.mode === 'cover') { S.cap.y = S.tw.y; S.cap.yTouched = true; } }
+  syncCapUI(); syncTw(); redraw();
+};
+$('#twY').oninput = (e) => { S.tw.y = e.target.value / 100; S.cap.y = S.tw.y; S.cap.yTouched = true; syncCapUI(); syncTw(); redraw(); };
+$('#twH').oninput = (e) => { S.tw.h = e.target.value / 100; syncTw(); redraw(); };
+syncTw();
 $('#font').onchange = (e) => { S.cap.font = e.target.value; document.fonts.load(`${FONTS[S.cap.font].w} 40px ${FONTS[S.cap.font].css}`).then(redraw); redraw(); };
 $('#upper').onchange = (e) => { S.cap.upper = e.target.checked; redraw(); };
 $('#size').oninput = (e) => { S.cap.size = +e.target.value; $('#sizeV').textContent = e.target.value; redraw(); };
