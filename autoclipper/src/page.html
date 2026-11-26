@@ -273,6 +273,21 @@ try { key = localStorage.getItem('acKey') || ''; } catch (e) {}
 const hk = location.hash.match(/key=([a-f0-9]+)/);
 if (hk) { key = hk[1]; try { localStorage.setItem('acKey', key); } catch (e) {} history.replaceState(null, '', location.pathname); }
 let S = null, pollT = null, notes = {};
+// Update only what changed, so pictures and bars don't blink every refresh
+function morph(a, b) {
+  if (a.nodeType !== b.nodeType || a.nodeName !== b.nodeName) { a.replaceWith(b.cloneNode(true)); return; }
+  if (a.nodeType !== 1) { if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue; return; }
+  for (const at of [...a.attributes]) if (!b.hasAttribute(at.name)) a.removeAttribute(at.name);
+  for (const at of b.attributes) if (a.getAttribute(at.name) !== at.value) a.setAttribute(at.name, at.value);
+  morphKids(a, b);
+}
+function morphKids(a, b) {
+  const ak = [...a.childNodes], bk = [...b.childNodes];
+  for (let i = 0; i < bk.length; i++) { if (i < ak.length) morph(ak[i], bk[i]); else a.appendChild(bk[i].cloneNode(true)); }
+  for (let i = bk.length; i < ak.length; i++) ak[i].remove();
+}
+function setHTML(el, html) { if (el._h === html) return; el._h = html; const t = document.createElement('template'); t.innerHTML = html; morphKids(el, t.content); }
+
 let toastT;
 function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 3500); }
 async function api(path, body) {
@@ -282,7 +297,7 @@ async function api(path, body) {
   return j;
 }
 function show(id) { for (const v of ['#vClaim', '#vKey', '#vConnect', '#vMain']) $(v).hidden = v !== id; }
-function ago(t) { const s = Math.max(1, Math.round((Date.now() - t) / 1000)); if (s < 60) return s + 's ago'; const m = Math.round(s / 60); if (m < 60) return m + ' min ago'; const h = Math.round(m / 60); if (h < 24) return h + ' h ago'; return Math.round(h / 24) + ' d ago'; }
+function ago(t) { const s = Math.max(1, Math.round((Date.now() - t) / 1000)); if (s < 60) return 'just now'; const m = Math.round(s / 60); if (m < 60) return m + ' min ago'; const h = Math.round(m / 60); if (h < 24) return h + ' h ago'; return Math.round(h / 24) + ' d ago'; }
 function clock(t) { return new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
 
 async function refresh() {
@@ -301,18 +316,18 @@ function render() {
   setPill(!s.cfg.enabled ? 'Off' : s.chat ? `Watching ${live.length}` : live.length ? 'Connecting…' : 'Waiting for streams', s.cfg.enabled && s.chat);
   $('#statusLine').textContent = !s.cfg.enabled ? 'Off. Nothing will be clipped.' : !s.streamers.length ? 'Add some streamers below.' : live.length ? `${live.length} of ${s.streamers.length} live. Watching chat for hype.` : `None of your ${s.streamers.length} streamers are live. It checks every minute.`;
   $('#stCount').textContent = s.streamers.length ? `${s.streamers.length}` : '';
-  $('#stList').innerHTML = s.streamers.length ? s.streamers.map((x) => {
+  setHTML($('#stList'), s.streamers.length ? s.streamers.map((x) => {
     const pct = x.live && x.base ? Math.min(100, Math.round(x.rate / (x.base * 3) * 100)) : 0;
     const sub = x.live ? `${esc(x.game || 'Live')} · ${Number(x.viewers || 0).toLocaleString()} watching · ${x.clips} clip${x.clips === 1 ? '' : 's'} this stream` : 'Offline';
     const chat = x.live ? (x.base == null ? 'Learning normal chat speed…' : `${x.rate} people chatting now · normal ${x.base}` + (x.style === 'talk' ? ` · ${x.agree} agreeing` : '')) : '';
     return `<div class="st"><img src="${esc(x.avatar)}" alt="" loading="lazy"><div><b>${esc(x.name)} <span class="badge${x.live ? '' : ' off'}">${x.live ? 'LIVE' : 'OFF'}</span>${x.editor === true ? ' <span class="edtag">EDITOR ✓</span>' : ''}</b><small>${sub}</small>${x.live ? `<small>${chat}</small><div class="meter"><i style="width:${pct}%"></i></div>` : ''}<div class="style" role="group" aria-label="Clip style for ${esc(x.name)}"><button data-style="hype" data-sid="${esc(x.id)}" class="${x.style !== 'talk' ? 'on' : ''}">Hype</button><button data-style="talk" data-sid="${esc(x.id)}" class="${x.style === 'talk' ? 'on' : ''}">Talk</button></div>${x.editor === true ? '' : `<div><button class="edcheck" data-edcheck="${esc(x.id)}">${x.editor === false ? 'Not an editor yet · check again' : 'Check editor access'}</button></div>`}</div><div class="acts">${x.live ? `<button class="btn mini" data-clip="${esc(x.id)}">Clip now</button>` : ''}<button class="btn mini" data-rm="${esc(x.id)}" aria-label="Remove ${esc(x.name)}">✕</button></div></div>`;
-  }).join('') : '<div class="empty">No streamers yet. Add a few you like to clip.</div>';
+  }).join('') : '<div class="empty">No streamers yet. Add a few you like to clip.</div>');
   $('#clipCount').textContent = s.clips.length ? `${s.clips.length}` : '';
-  $('#clipList').innerHTML = s.clips.length ? s.clips.map((c) => {
+  setHTML($('#clipList'), s.clips.length ? s.clips.map((c) => {
     const th = c.thumb ? `style="background-image:url('${esc(c.thumb)}')"` : '';
     const label = c.status === 'processing' ? 'Processing…' : c.status === 'failed' ? 'Twitch couldn’t make this one' : '';
     return `<article class="clip"><div class="thumb" ${th}>${label}<span>${esc(c.name)}</span></div><div class="cbody"><b>${esc(c.why)}</b><small>${ago(c.at)}${c.game ? ' · ' + esc(c.game) : ''}${c.manual ? ' · by you' : ''}</small>${c.top && c.top.length ? `<div class="tags">${c.top.map((t) => `<em>${esc(t)}</em>`).join('')}</div>` : ''}<div class="cacts"><a class="btn mini" href="${esc(c.url)}" target="_blank" rel="noopener">Watch</a><button class="btn mini" data-dl="${esc(c.id)}"${c.status !== 'ready' ? ' disabled' : ''}>Download</button><button class="btn mini" data-del="${esc(c.id)}" aria-label="Remove from list">✕</button></div>${notes[c.id] || ''}</div></article>`;
-  }).join('') : '<div class="empty">No clips yet. When chat explodes on a live stream, clips show up here.</div>';
+  }).join('') : '<div class="empty">No clips yet. When chat explodes on a live stream, clips show up here.</div>');
   for (const b of $('#sens').children) b.classList.toggle('on', b.dataset.v === s.cfg.sensitivity);
   $('#sensHint').textContent = SENS_HINT[s.cfg.sensitivity];
   const hasDc = !!s.cfg.discord;
@@ -323,7 +338,7 @@ function render() {
   if (document.activeElement !== $('#digestHour')) $('#digestHour').value = String(s.cfg.digestHour);
   $('#tzNote').textContent = s.cfg.digestOn && hasDc ? `Morning picks go out between ${s.cfg.digestHour % 12 || 12} ${s.cfg.digestHour < 12 ? 'AM' : 'PM'} and ${(s.cfg.digestHour + 2) % 12 || 12} ${(s.cfg.digestHour + 2) < 12 ? 'AM' : 'PM'} your time (${s.cfg.tz}), covering the last 14 hours.` : '';
   $('#clipLen').value = s.cfg.clipLen; $('#maxPer').value = s.cfg.maxPerStream; $('#cooldown').value = s.cfg.cooldown;
-  $('#log').innerHTML = s.log.length ? s.log.map((l) => `<li><time>${clock(l.at)}</time><span>${esc(l.text)}</span></li>`).join('') : '<li><span class="mute">Nothing yet.</span></li>';
+  setHTML($('#log'), s.log.length ? s.log.map((l) => `<li><time>${clock(l.at)}</time><span>${esc(l.text)}</span></li>`).join('') : '<li><span class="mute">Nothing yet.</span></li>');
 }
 
 $('#saveCid').onclick = async () => {
