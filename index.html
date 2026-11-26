@@ -82,7 +82,7 @@ input[type=range]{accent-color:var(--acc);width:100%;min-height:32px}
 .status{margin-top:10px;font-size:13px;color:var(--mute)}
 .bar{height:6px;background:var(--panel2);border-radius:3px;overflow:hidden;margin-bottom:6px}
 .bar i{display:block;height:100%;width:0;background:var(--acc);transition:width .2s}
-.caplist{margin-top:12px;display:flex;flex-direction:column;gap:6px}
+.caplist{margin-top:12px;display:flex;flex-direction:column;gap:6px;max-height:240px;overflow:auto;overscroll-behavior:contain}
 .cap-row{display:grid;grid-template-columns:56px minmax(0,1fr);gap:6px;align-items:center}
 .cap-row .ts{background:none;border:0;color:var(--mute);font-size:12.5px;font-variant-numeric:tabular-nums;text-align:left;padding:8px 0;min-height:40px}
 .cap-row input{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:16px;width:100%}
@@ -225,6 +225,8 @@ body.mmbusy .tabs,body.mmbusy #mmSettings,body.mmbusy #mmPick{pointer-events:non
   </section>
 
   <section class="panel off" data-p="cap">
+    <label>Title on top<input id="hookText" maxlength="80" placeholder="e.g. Clix asks Kimchi his net worth" autocomplete="off"></label>
+    <label>Show the title<select id="hookWhen"><option value="all">Whole video</option><option value="start">First 3 seconds</option></select></label>
     <div class="split">
       <select id="model" aria-label="Caption model">
         <option value="Xenova/whisper-tiny.en" selected>Fast (English)</option>
@@ -444,6 +446,7 @@ const S = {
   layout: 'full', split: 0.38, zoom: 1.15,
   boxes: {},
   tw: { mode: 'none', y: 0.76, h: 0.11 },
+  hook: { text: '', when: 'all' },
   cap: { on: true, font: 'Montserrat', size: 86, y: 0.7, per: 3, hi: '#ffd23f', upper: true, yTouched: false },
   words: [], groups: [], exporting: false
 };
@@ -584,6 +587,7 @@ function draw() {
   renderVideo(ctx, video, S.layout, 1);
   coverTwitchCaps(ctx);
   if (S.cap.on) drawCaps(video.currentTime);
+  if (S.hook.text.trim() && (S.hook.when === 'all' || video.currentTime - S.inT < 3.2)) drawHook(ctx, S.hook.text.trim());
 }
 function activeGroupIndex(t, G = S.groups) {
   for (let i = 0; i < G.length; i++) {
@@ -650,7 +654,7 @@ function updateTransport() {
   if (gi !== lastRow) {
     const rows = $('#capList').children;
     if (rows[lastRow]) rows[lastRow].classList.remove('now');
-    if (rows[gi]) { rows[gi].classList.add('now'); if (!video.paused) rows[gi].scrollIntoView({ block: 'nearest' }); }
+    if (rows[gi]) { rows[gi].classList.add('now'); if (!video.paused) { const L = $('#capList'), r = rows[gi]; if (L.scrollHeight > L.clientHeight + 4) L.scrollTop = r.offsetTop - L.offsetTop - L.clientHeight / 2 + r.offsetHeight / 2; } }
     lastRow = gi;
   }
 }
@@ -793,6 +797,8 @@ $('#twCap').onchange = (e) => {
 $('#twY').oninput = (e) => { S.tw.y = e.target.value / 100; S.cap.y = S.tw.y; S.cap.yTouched = true; syncCapUI(); syncTw(); redraw(); };
 $('#twH').oninput = (e) => { S.tw.h = e.target.value / 100; syncTw(); redraw(); };
 syncTw();
+$('#hookText').oninput = (e) => { S.hook.text = e.target.value; if (video.paused) draw(); };
+$('#hookWhen').onchange = (e) => { S.hook.when = e.target.value; if (video.paused) draw(); };
 $('#font').onchange = (e) => { S.cap.font = e.target.value; document.fonts.load(`${FONTS[S.cap.font].w} 40px ${FONTS[S.cap.font].css}`).then(redraw); redraw(); };
 $('#upper').onchange = (e) => { S.cap.upper = e.target.checked; redraw(); };
 $('#size').oninput = (e) => { S.cap.size = +e.target.value; $('#sizeV').textContent = e.target.value; redraw(); };
