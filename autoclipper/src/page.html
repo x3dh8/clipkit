@@ -214,7 +214,7 @@ input[type=text],select{background:var(--panel2);border:1px solid var(--line);bo
 {
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const SENS_HINT = { chill: 'Only the biggest moments, when chat goes 4× faster than usual.', normal: 'Clear hype moments, when chat goes about 3× faster than usual.', hyped: 'Catches smaller moments too. Expect more clips.' };
+const SENS_HINT = { chill: 'Only the biggest moments, when about 4× more people than usual react at once.', normal: 'Clear hype moments, when about 3× more people than usual react at once.', hyped: 'Catches smaller moments too. Expect more clips.' };
 let key = '';
 try { key = localStorage.getItem('acKey') || ''; } catch (e) {}
 const hk = location.hash.match(/key=([a-f0-9]+)/);
@@ -251,7 +251,7 @@ function render() {
   $('#stList').innerHTML = s.streamers.length ? s.streamers.map((x) => {
     const pct = x.live && x.base ? Math.min(100, Math.round(x.rate / (x.base * 3) * 100)) : 0;
     const sub = x.live ? `${esc(x.game || 'Live')} · ${Number(x.viewers || 0).toLocaleString()} watching · ${x.clips} clip${x.clips === 1 ? '' : 's'} this stream` : 'Offline';
-    const chat = x.live ? (x.base == null ? 'Learning normal chat speed…' : `Chat ${x.rate}/sec · normal ${x.base}/sec`) : '';
+    const chat = x.live ? (x.base == null ? 'Learning normal chat speed…' : `${x.rate} people chatting now · normal ${x.base}`) : '';
     return `<div class="st"><img src="${esc(x.avatar)}" alt="" loading="lazy"><div><b>${esc(x.name)} <span class="badge${x.live ? '' : ' off'}">${x.live ? 'LIVE' : 'OFF'}</span></b><small>${sub}</small>${x.live ? `<small>${chat}</small><div class="meter"><i style="width:${pct}%"></i></div>` : ''}</div><div class="acts">${x.live ? `<button class="btn mini" data-clip="${esc(x.id)}">Clip now</button>` : ''}<button class="btn mini" data-rm="${esc(x.id)}" aria-label="Remove ${esc(x.name)}">✕</button></div></div>`;
   }).join('') : '<div class="empty">No streamers yet. Add a few you like to clip.</div>';
   $('#clipCount').textContent = s.clips.length ? `${s.clips.length}` : '';

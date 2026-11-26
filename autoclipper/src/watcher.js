@@ -12,11 +12,16 @@ const WINDOW = 600; // seconds of per-second chat stats kept per channel
 const HYPE_RE = /^(kekw|lulw?|omegalul|icant|pog\w*|monka\w*|wicked|lmf?ao+|ha(ha)+|holy|wtf|no{3,}|na+h{2,}|nah{2,}|💀+|😂+|🤣+|🔥+|\+\d|clip(ped|it)?|insane|crazy|omg|wha{2,}t+|what{2,}|gg+|ez|clap|kreygasm|bruh+|sheesh|w+)$/i;
 const CLIP_RE = /\bclip(\s*it|ped|\s*that)?\b/i;
 
+// min5 = how many different people must be chatting in 5 seconds; mult = how many times the normal amount
 const SENS = {
-  chill: { mult: 4.0, min5: 15 },
-  normal: { mult: 3.0, min5: 10 },
-  hyped: { mult: 2.2, min5: 6 }
+  chill: { mult: 4.0, min5: 12 },
+  normal: { mult: 3.0, min5: 8 },
+  hyped: { mult: 2.2, min5: 5 }
 };
+// Chat bots whose messages never count
+const BOTS = new Set(['nightbot', 'streamelements', 'moobot', 'fossabot', 'streamlabs', 'wizebot', 'botrixoficial', 'sery_bot', 'soundalerts', 'kofistreambot', 'blerp', 'pokemoncommunitygame', 'deepbot', 'phantombot', 'coebot', 'ankhbot', 'vivbot', 'own3d', 'tangiabot', 'streamstickers', 'commanderroot', 'frostytoolsdotcom', 'lolrankbot', 'creatisbot', 'songlistbot', 'kattah', 'buttsbot', 'pretzelrocks', 'restreambot', 'botisimo', 'stay_hydrated_bot', 'mixitupbot', 'supibot', 'electricallongboard', 'streamholics']);
+// How long to ignore chat after events that make chat explode for reasons other than gameplay
+const QUIET = { raid: 90, unraid: 30, sub_gift: 20, community_sub_gift: 45, gift_paid_upgrade: 15, prime_paid_upgrade: 10, pay_it_forward: 15, sub: 8, resub: 8, bits_badge_tier: 15, charity_donation: 20, announcement: 20, watch_streak: 5 };
 
 const defaultCfg = () => ({ clientId: '', enabled: true, streamers: [], sensitivity: 'normal', clipLen: 30, maxPerStream: 5, cooldown: 120 });
 
@@ -32,21 +37,32 @@ class ChannelStats {
   constructor() {
     this.n = new Uint16Array(WINDOW); this.h = new Uint16Array(WINDOW); this.c = new Uint16Array(WINDOW);
     this.tokens = Array.from({ length: WINDOW }, () => null);
-    this.sec = 0; this.base = null; this.seen = 0; this.lastClip = 0;
+    this.people = Array.from({ length: WINDOW }, () => null);
+    this.hypers = Array.from({ length: WINDOW }, () => null);
+    this.askers = Array.from({ length: WINDOW }, () => null);
+    this.sec = 0; this.base = null; this.seen = 0; this.lastClip = 0; this.quietUntil = 0; this.lastU5 = 0; this.warmSum = 0;
+  }
+  union(arr, now, secs) {
+    const all = new Set();
+    for (let k = 0; k < secs; k++) { const s = arr[(now - k + WINDOW) % WINDOW]; if (s) for (const x of s) all.add(x); }
+    return all.size;
   }
   roll(now) {
     if (!this.sec) { this.sec = now; return; }
     for (let s = this.sec + 1; s <= now && s - this.sec <= WINDOW; s++) {
-      const i = s % WINDOW; this.n[i] = 0; this.h[i] = 0; this.c[i] = 0; this.tokens[i] = null;
+      const i = s % WINDOW; this.n[i] = 0; this.h[i] = 0; this.c[i] = 0; this.tokens[i] = null; this.people[i] = null; this.hypers[i] = null; this.askers[i] = null;
     }
     if (now > this.sec) this.sec = now;
   }
-  add(now, hypeTokens, isClip) {
+  add(now, who, hypeTokens, isClip) {
     this.roll(now);
     const i = now % WINDOW;
     this.n[i]++;
+    (this.people[i] || (this.people[i] = new Set())).add(who);
+    if (isClip) (this.askers[i] || (this.askers[i] = new Set())).add(who);
     if (hypeTokens.length) {
       this.h[i]++;
+      (this.hypers[i] || (this.hypers[i] = new Set())).add(who);
       const m = this.tokens[i] || (this.tokens[i] = new Map());
       for (const t of hypeTokens) m.set(t, (m.get(t) || 0) + 1);
     }
@@ -152,7 +168,7 @@ export class Watcher {
       chat: !!(this.ws && this.session),
       streamers: this.cfg.streamers.map((s) => {
         const L = this.live[s.id], st = this.stats.get(s.id);
-        const rate = st && st.sec ? st.sum(st.n, Math.min(nowS, st.sec), 10) / 10 : 0;
+        const rate = st ? st.lastU5 : 0;
         return { ...s, live: !!L, title: L && L.title, game: L && L.game, viewers: L && L.viewers, since: L && L.since,
           rate: Math.round(rate * 10) / 10, base: st && st.base != null ? Math.round(st.base * 10) / 10 : null,
           clips: L ? this.clips.filter((c) => c.broadcaster_id === s.id && c.streamKey === L.since).length : 0 };
@@ -259,7 +275,7 @@ export class Watcher {
     }
     this.live = live; await this.st.put('live', live);
     const want = this.cfg.enabled ? ids.filter((id) => live[id]) : [];
-    if (want.length) { await this.ensureWs(); await this.syncSubs(want); }
+    if (want.length) { await this.ensureWs(); await this.syncSubs(want); await this.checkViewerClips(want); }
     else await this.closeWs();
     await this.checkClips();
     return want.length > 0;
@@ -309,6 +325,7 @@ export class Watcher {
       this.openWs(url).catch(() => this.closeWs());
     } else if (type === 'notification') {
       if (m.payload.subscription.type === 'channel.chat.message') this.onChat(m.payload.event);
+      else if (m.payload.subscription.type === 'channel.chat.notification') this.onNotice(m.payload.event);
     } else if (type === 'revocation') {
       const sub = m.payload.subscription;
       for (const [k, v] of this.subs) if (v === sub.id) this.subs.delete(k);
@@ -317,31 +334,47 @@ export class Watcher {
   }
   async syncSubs(want) {
     for (const id of want) {
-      if (this.subs.has(id)) continue;
-      try {
-        const j = await this.helix('/eventsub/subscriptions', { method: 'POST', body: { type: 'channel.chat.message', version: '1', condition: { broadcaster_user_id: id, user_id: this.auth.userId }, transport: { method: 'websocket', session_id: this.session } } });
-        this.subs.set(id, j.data && j.data[0] && j.data[0].id);
-      } catch (e) {
-        if (e.status === 409) this.subs.set(id, 'existing');
-        else this.addLog(`Couldn't watch chat for ${this.nameOf(id)}: ${e.message}`);
+      for (const type of ['channel.chat.message', 'channel.chat.notification']) {
+        const k = id + '|' + type;
+        if (this.subs.has(k)) continue;
+        try {
+          const j = await this.helix('/eventsub/subscriptions', { method: 'POST', body: { type, version: '1', condition: { broadcaster_user_id: id, user_id: this.auth.userId }, transport: { method: 'websocket', session_id: this.session } } });
+          this.subs.set(k, j.data && j.data[0] && j.data[0].id);
+        } catch (e) {
+          if (e.status === 409) this.subs.set(k, 'existing');
+          else if (type === 'channel.chat.message') this.addLog(`Couldn't watch chat for ${this.nameOf(id)}: ${e.message}`);
+        }
       }
     }
-    for (const [id, subId] of this.subs) {
+    for (const [k, subId] of this.subs) {
+      const id = k.split('|')[0];
       if (want.includes(id)) continue;
-      this.subs.delete(id);
+      this.subs.delete(k);
       if (subId && subId !== 'existing') { try { await this.helix('/eventsub/subscriptions', { method: 'DELETE', query: { id: subId } }); } catch (e) {} }
     }
   }
   nameOf(id) { const s = this.cfg.streamers.find((x) => x.id === id); return s ? s.name : id; }
 
+  statsFor(id) { let st = this.stats.get(id); if (!st) { st = new ChannelStats(); this.stats.set(id, st); } return st; }
+  quiet(id, secs) { const st = this.statsFor(id); st.quietUntil = Math.max(st.quietUntil, this.now() + secs * 1000); }
+  onNotice(ev) {
+    const id = ev.broadcaster_user_id; if (!this.live[id]) return;
+    const secs = QUIET[ev.notice_type];
+    if (secs) this.quiet(id, secs);
+  }
   onChat(ev) {
     const id = ev.broadcaster_user_id; if (!this.live[id]) return;
-    let st = this.stats.get(id); if (!st) { st = new ChannelStats(); this.stats.set(id, st); }
+    const login = String(ev.chatter_user_login || '').toLowerCase();
     const text = (ev.message && ev.message.text) || '';
+    if (ev.chatter_user_id && ev.chatter_user_id === id) return; // the streamer
+    if (BOTS.has(login) || /bot$/.test(login)) return;
+    if (/^\s*!/.test(text)) return; // commands like !enter, !discord
+    if (ev.cheer && ev.cheer.bits >= 500) this.quiet(id, 20);
+    const st = this.statsFor(id);
     const words = text.split(/\s+/).filter(Boolean);
     const hype = [];
     for (const w of words) { const t = w.replace(/[!?.,]+$/, ''); if (t && HYPE_RE.test(t)) hype.push(t.length > 18 ? t.slice(0, 18) : t); }
-    st.add(Math.floor(this.now() / 1000), hype, CLIP_RE.test(text));
+    st.add(Math.floor(this.now() / 1000), ev.chatter_user_id || login || Math.random(), hype, CLIP_RE.test(text));
   }
 
   tick() {
@@ -350,37 +383,52 @@ export class Watcher {
     for (const [id, st] of this.stats) {
       const L = this.live[id]; if (!L) continue;
       st.roll(nowS);
-      const prev = st.n[(nowS - 1 + WINDOW) % WINDOW];
-      const n5 = st.sum(st.n, nowS - 1, 5), h5 = st.sum(st.h, nowS - 1, 5), c10 = st.sum(st.c, nowS - 1, 10), rate5 = n5 / 5;
+      // count PEOPLE, not messages, so a few spammers can't fake a spike
+      const u5 = st.union(st.people, nowS - 1, 5), hp5 = st.union(st.hypers, nowS - 1, 5), ask10 = st.union(st.askers, nowS - 1, 10);
+      st.lastU5 = u5;
       st.seen++;
-      if (st.seen <= 60) {
-        // learn the normal chat speed first: plain average of the first minute
-        st.warmSum = (st.warmSum || 0) + prev;
-        st.base = st.warmSum / st.seen;
-        continue;
-      }
-      const spiking = rate5 > st.base * 1.5;
-      st.base += (prev - st.base) * (spiking ? 1 / 900 : 1 / 120);
-      const base = Math.max(st.base, 0.3);
-      const fast = n5 >= S.min5 && rate5 >= base * S.mult;
-      const hypeShare = n5 ? h5 / n5 : 0;
-      const hit = (fast && (hypeShare >= 0.2 || rate5 >= base * S.mult * 1.6)) || (c10 >= 3 && n5 >= S.min5 / 2);
-      if (!hit) continue;
-      if (this.now() - st.lastClip < this.cfg.cooldown * 1000) continue;
-      const made = this.clips.filter((c) => c.broadcaster_id === id && c.streamKey === L.since).length;
-      if (made >= this.cfg.maxPerStream) continue;
-      st.lastClip = this.now();
-      const top = st.top(nowS - 1, 10);
-      const why = c10 >= 3 && !fast ? `Chat asked for a clip (${c10}×)` : `Chat ${(rate5 / base).toFixed(1)}× faster than normal`;
-      const s = this.cfg.streamers.find((x) => x.id === id);
-      if (s) this.createClip(s, why, top).catch((e) => this.addLog(`Clip failed for ${s.name}: ${e.message}`));
+      if (st.seen <= 60) { st.warmSum += u5; st.base = st.warmSum / st.seen; continue; } // learn normal first
+      const quiet = this.now() < st.quietUntil;
+      const spiking = u5 > st.base * 1.5;
+      st.base += (u5 - st.base) * (quiet ? 1 / 20 : spiking ? 1 / 900 : 1 / 120);
+      if (quiet) continue; // raid, gifted subs, etc.
+      const base = Math.max(st.base, 1);
+      const fast = u5 >= S.min5 && u5 >= base * S.mult;
+      const hypeShare = u5 ? hp5 / u5 : 0;
+      const asked = ask10 >= 3 && u5 >= S.min5 / 2;
+      if (!((fast && (hypeShare >= 0.25 || u5 >= base * S.mult * 1.6)) || asked)) continue;
+      const why = asked && !fast ? `${ask10} people asked for a clip` : `${u5} people reacting at once (${(u5 / base).toFixed(1)}× normal)`;
+      this.tryClip(id, why, st.top(nowS - 1, 10));
     }
   }
+  canClip(id) {
+    const L = this.live[id], st = this.statsFor(id);
+    if (!L || !this.cfg.enabled) return false;
+    if (this.now() - st.lastClip < this.cfg.cooldown * 1000) return false;
+    return this.clips.filter((c) => c.broadcaster_id === id && c.streamKey === L.since).length < this.cfg.maxPerStream;
+  }
+  tryClip(id, why, top, duration) {
+    if (!this.canClip(id)) return;
+    this.statsFor(id).lastClip = this.now();
+    const s = this.cfg.streamers.find((x) => x.id === id);
+    if (s) this.createClip(s, why, top, false, duration).catch((e) => this.addLog(`Clip failed for ${s.name}: ${e.message}`));
+  }
+  // When several different viewers clip within the last minute, something good just happened
+  async checkViewerClips(ids) {
+    const since = new Date(this.now() - 90 * 1000).toISOString();
+    await Promise.all(ids.map(async (id) => {
+      if (!this.canClip(id)) return;
+      let j; try { j = await this.helix('/clips', { query: { broadcaster_id: id, started_at: since, first: '20' } }); } catch (e) { return; }
+      const fresh = (j.data || []).filter((c) => c.creator_id !== this.auth.userId && this.now() - Date.parse(c.created_at) < 75 * 1000);
+      const people = new Set(fresh.map((c) => c.creator_id));
+      if (people.size >= 2) this.tryClip(id, `${people.size} viewers clipped this moment`, [], 60);
+    }));
+  }
 
-  async createClip(s, why, top, manual) {
+  async createClip(s, why, top, manual, duration) {
     const L = this.live[s.id] || {};
     const title = (top && top.length ? `${top[0][0]} moment` : 'Hype moment').slice(0, 100);
-    const j = await this.helix('/clips', { method: 'POST', query: { broadcaster_id: s.id, duration: String(this.cfg.clipLen), title } });
+    const j = await this.helix('/clips', { method: 'POST', query: { broadcaster_id: s.id, duration: String(Math.max(duration || 0, this.cfg.clipLen)), title } });
     const d = j.data && j.data[0];
     if (!d) throw new Error('Twitch did not return a clip.');
     const rec = { id: d.id, edit_url: d.edit_url, url: `https://clips.twitch.tv/${d.id}`, broadcaster_id: s.id, login: s.login, name: s.name,
