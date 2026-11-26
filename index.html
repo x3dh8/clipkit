@@ -313,7 +313,8 @@ a.btn.primary{color:#fff}
   <section class="panel">
     <h3>Your clips</h3>
     <div class="mlist" id="bList"></div>
-    <div class="madd"><button class="btn primary" id="bAdd">Add clips</button><input type="file" id="bFiles" accept="video/*" multiple hidden></div>
+    <div class="madd"><button class="btn primary" id="bAdd">Add clips</button><button class="btn" id="bPull">Get clips from my auto clipper</button><input type="file" id="bFiles" accept="video/*" multiple hidden></div>
+    <div id="bLinkRow" hidden style="margin-top:10px"><p class="hint">Paste your auto clipper's private link, from its “Use on another device” section. You only do this once.</p><div class="split" style="margin-top:6px"><input type="text" id="bLink" placeholder="Auto clipper private link" autocomplete="off" style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px;min-height:44px;font-size:16px"><button class="btn primary" id="bLinkSave" style="flex:none">Connect</button></div></div>
   </section>
   <section class="panel bset">
     <h3>Style for every video</h3>
@@ -1433,10 +1434,10 @@ function drawBatchFrame(it, t, o) {
   if (o.caps && it.groups && it.groups.length) drawCapsOn(bctx2, it.groups, t);
   if (o.hook && (o.hookWhen === 'all' || t - (it.start || 0) < 3.2)) drawHook(bctx2, it.hook);
 }
-async function addBatchFiles(files) {
+async function addBatchFiles(files, hookOverride) {
   const list = files.filter((f) => /^video\//.test(f.type) || /\.(mp4|mov|webm|mkv|m4v)$/i.test(f.name));
   for (const f of list) {
-    const it = { id: ++bid, file: f, url: URL.createObjectURL(f), name: f.name, hook: cleanHook(f.name), status: 'waiting', msg: '' };
+    const it = { id: ++bid, file: f, url: URL.createObjectURL(f), name: f.name, hook: hookOverride != null ? hookOverride : cleanHook(f.name), status: 'waiting', msg: '' };
     B.items.push(it);
     thumbAt(it.url, 1).then((th) => { it.thumb = th; renderBList(); });
   }
@@ -1580,6 +1581,47 @@ $('#bGo').onclick = async () => {
 try { const o = JSON.parse(localStorage.getItem('clipkit-batch') || 'null'); if (o) { $('#bLayout').value = o.layout; $('#bCaps').checked = o.caps; $('#bTrim').checked = !!o.trim; $('#bHook').checked = o.hook; $('#bHookWhen').value = o.hookWhen; $('#bFps').value = String(o.fps); $('#bModel').value = o.model; } } catch (e) {}
 renderBList();
 if (location.hash === '#batch') setTimeout(() => setView('batch'), 0);
+
+/* ---------- pull clips from the auto clipper (channels you edit) ---------- */
+const genericTitle = (t) => !t || /^(hype moment|best moment|.{1,18} moment)$/i.test(t);
+function acConf() {
+  try { const raw = localStorage.getItem('clipkit-ac') || ''; const u = new URL(raw); const k = (u.hash.match(/key=([a-f0-9]+)/) || [])[1]; return k ? { origin: u.origin, key: k } : null; }
+  catch (e) { return null; }
+}
+async function pullClips(c) {
+  bStatusLine('Checking your auto clipper…', null);
+  let list;
+  try {
+    const r = await fetch(c.origin + '/api/clips/ready', { headers: { 'x-clipkit-key': c.key } });
+    if (r.status === 401) { try { localStorage.removeItem('clipkit-ac'); } catch (e) {} $('#bLinkRow').hidden = false; bStatusLine('That link no longer works. Paste your auto clipper link again.', null); return; }
+    list = (await r.json()).clips || [];
+  } catch (e) { bStatusLine("Couldn't reach your auto clipper. Check your internet and try again.", null); return; }
+  let seen; try { seen = new Set(JSON.parse(localStorage.getItem('clipkit-ac-seen') || '[]')); } catch (e) { seen = new Set(); }
+  const fresh = list.filter((x) => !seen.has(x.id));
+  if (!fresh.length) { bStatusLine(list.length ? 'No new clips. You already pulled in everything.' : "No clips yet. Clips only come through for streamers who made you an editor (they show EDITOR ✓ in the auto clipper).", null); return; }
+  let ok = 0;
+  for (let i = 0; i < fresh.length; i++) {
+    const x = fresh[i];
+    bStatusLine(`Downloading clip ${i + 1} of ${fresh.length} from Twitch…`, i / fresh.length);
+    try {
+      const r = await fetch(c.origin + '/api/clips/file?id=' + encodeURIComponent(x.id), { headers: { 'x-clipkit-key': c.key } });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || 'error ' + r.status); }
+      const blob = await r.blob();
+      const f = new File([blob], (r.headers.get('x-clip-name') || 'clip') + '.mp4', { type: blob.type || 'video/mp4' });
+      await addBatchFiles([f], genericTitle(x.title) ? '' : x.title);
+      seen.add(x.id); ok++;
+    } catch (e) { toast(`Couldn't get a clip from ${x.name}: ${e.message}`); }
+  }
+  try { localStorage.setItem('clipkit-ac-seen', JSON.stringify([...seen].slice(-500))); } catch (e) {}
+  bStatusLine(`Added ${ok} clip${ok === 1 ? '' : 's'} from your auto clipper. Tap Make all videos.`, ok ? 1 : null);
+}
+$('#bPull').onclick = () => { const c = acConf(); if (!c) { $('#bLinkRow').hidden = false; $('#bLink').focus(); return; } pullClips(c); };
+$('#bLinkSave').onclick = () => {
+  const v = $('#bLink').value.trim();
+  try { const u = new URL(v); if (!/key=[a-f0-9]+/.test(u.hash)) throw 0; localStorage.setItem('clipkit-ac', v); }
+  catch (e) { toast("Paste the private link from your auto clipper's “Use on another device” section."); return; }
+  $('#bLink').value = ''; $('#bLinkRow').hidden = true; pullClips(acConf());
+};
 
 /* ---------- export ---------- */
 let cancelReq = false;

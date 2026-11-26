@@ -219,6 +219,17 @@ export class Watcher {
       }
       if (path === '/api/clips/download' && method === 'POST') return json(await this.download(body.id));
       if (path === '/api/trending') return json(await this.trending(url.searchParams));
+      if (path === '/api/streamers/check-editor' && method === 'POST') {
+        const s = this.cfg.streamers.find((x) => x.id === body.id); if (!s) return json({ error: 'Unknown streamer' }, 400);
+        return json({ editor: await this.checkEditor(s) });
+      }
+      if (path === '/api/vodclip' && method === 'POST') return json(await this.vodClip(body));
+      if (path === '/api/clips/ready') {
+        const ed = new Set(this.cfg.streamers.filter((s) => s.editor === true).map((s) => s.id));
+        return json({ clips: this.clips.filter((c) => c.status === 'ready' && ed.has(c.broadcaster_id)).slice(0, 50)
+          .map((c) => ({ id: c.id, name: c.name, title: c.title || '', why: c.why, at: c.at, duration: c.duration, thumb: c.thumb })) });
+      }
+      if (path === '/api/clips/file') return await this.clipFile(url.searchParams.get('id'));
       if (path === '/api/discord/test' && method === 'POST') {
         if (!this.cfg.discord) return json({ error: 'Add a Discord webhook link first.' }, 400);
         await this.discord({ content: '✅ ClipKit Auto is connected. New clips and your morning picks will show up here.' });
@@ -331,6 +342,7 @@ export class Watcher {
     this.cfg.streamers.push(s); await this.st.put('cfg', this.cfg);
     this.addLog(`Now watching ${s.name}.`);
     await this.kick();
+    this.checkEditor(s).catch(() => {});
     return { ok: true, streamer: s };
   }
 
@@ -359,6 +371,8 @@ export class Watcher {
     if (want.length) { await this.ensureWs(); await this.syncSubs(want); await this.checkViewerClips(want); }
     else await this.closeWs();
     await this.checkClips();
+    const stale = this.cfg.streamers.find((s) => s.editor !== true && this.now() - (s.editorChecked || 0) > 24 * 3600 * 1000);
+    if (stale) await this.checkEditor(stale).catch(() => {});
     return want.length > 0;
   }
 
@@ -540,7 +554,7 @@ export class Watcher {
     const j = await this.helix('/clips', { method: 'POST', query: { broadcaster_id: s.id, duration: String(Math.max(duration || 0, this.cfg.clipLen)), title } });
     const d = j.data && j.data[0];
     if (!d) throw new Error('Twitch did not return a clip.');
-    const rec = { id: d.id, edit_url: d.edit_url, url: `https://clips.twitch.tv/${d.id}`, broadcaster_id: s.id, login: s.login, name: s.name,
+    const rec = { id: d.id, title, edit_url: d.edit_url, url: `https://clips.twitch.tv/${d.id}`, broadcaster_id: s.id, login: s.login, name: s.name,
       at: this.now(), why, top: (top || []).map(([t, n]) => `${t} ×${n}`), game: L.game || '', streamKey: L.since || '', status: 'processing', manual: !!manual };
     this.clips.unshift(rec); if (this.clips.length > 200) this.clips.length = 200;
     await this.st.put('clips', this.clips);
@@ -658,6 +672,54 @@ export class Watcher {
     await this.discord({ content: `**${head}:**${mineLine}`, embeds });
     this.addLog(`Sent ${picks.length} morning pick${picks.length === 1 ? '' : 's'} to Discord.`);
     return { ok: true, picks: picks.length };
+  }
+
+
+  /* ---------------- Editor mode ---------------- */
+  // You're an editor for a channel if Twitch lets you get download links for its clips.
+  async checkEditor(s) {
+    let j;
+    try { j = await this.helix('/clips', { query: { broadcaster_id: s.id, first: '1' } }); } catch (e) { return s.editor; }
+    const c = j.data && j.data[0];
+    s.editorChecked = this.now();
+    if (!c) { await this.st.put('cfg', this.cfg); return s.editor == null ? null : s.editor; }
+    const was = s.editor;
+    try { await this.helix('/clips/downloads', { query: { editor_id: this.auth.userId, broadcaster_id: s.id, clip_id: c.id } }); s.editor = true; }
+    catch (e) { if (e.status === 403 || e.status === 401 || e.status === 400) s.editor = false; else return s.editor; }
+    await this.st.put('cfg', this.cfg);
+    if (s.editor && !was) this.addLog(`You're an editor for ${s.name}. Their clips now download automatically, and you can clip from their VODs.`);
+    return s.editor;
+  }
+  async vodClip(b) {
+    const s = this.cfg.streamers.find((x) => x.id === b.broadcaster_id);
+    if (!s) throw new Error('Add this streamer to your list first.');
+    if (s.editor !== true) { const e = new Error(`You need to be an editor for ${s.name} to clip from their VODs.`); e.status = 403; throw e; }
+    if (!b.video_id || b.end == null) throw new Error('This clip has no VOD to clip from.');
+    const duration = Math.min(60, Math.max(5, Math.round(+b.duration || 30)));
+    const end = Math.max(duration, Math.round(+b.end));
+    const title = String(b.title || 'Best moment').slice(0, 100);
+    const j = await this.helix('/videos/clips', { method: 'POST', query: { editor_id: this.auth.userId, broadcaster_id: s.id, vod_id: String(b.video_id), vod_offset: String(end), duration: String(duration), title } });
+    const d = j.data && j.data[0];
+    if (!d) throw new Error('Twitch did not return a clip.');
+    const rec = { id: d.id, title, edit_url: d.edit_url, url: `https://clips.twitch.tv/${d.id}`, broadcaster_id: s.id, login: s.login, name: s.name,
+      at: this.now(), why: 'Clipped from the VOD', top: [], game: '', streamKey: 'vod', status: 'processing', manual: true };
+    this.clips.unshift(rec); if (this.clips.length > 200) this.clips.length = 200;
+    await this.st.put('clips', this.clips);
+    this.addLog(`Clipped ${s.name} from the VOD: ${title}.`);
+    await this.kick(20000);
+    return { ok: true, clip: rec };
+  }
+  async clipFile(id) {
+    const c = this.clips.find((x) => x.id === id);
+    if (!c) return json({ error: 'Clip not found.' }, 404);
+    const r = await this.download(id);
+    if (!r.url) return json({ error: "Twitch won't give a download for this clip. You need to be an editor for that channel." }, 403);
+    const v = await fetch(r.url);
+    if (!v.ok || !v.body) return json({ error: `Twitch's video server said ${v.status}.` }, 502);
+    const name = (c.title || c.name + ' clip').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_').slice(0, 60) || 'clip';
+    const headers = { 'content-type': v.headers.get('content-type') || 'video/mp4', 'x-clip-name': name, 'cache-control': 'no-store' };
+    if (v.headers.get('content-length')) headers['content-length'] = v.headers.get('content-length');
+    return new Response(v.body, { headers });
   }
 
   async download(id) {

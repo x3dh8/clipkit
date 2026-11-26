@@ -114,6 +114,8 @@ details ol{margin-top:6px}
 .style{display:inline-flex;background:var(--panel2);border-radius:8px;padding:2px;gap:2px;margin-top:6px}
 .style button{border:0;background:none;color:var(--mute);font-size:12px;font-weight:600;padding:4px 10px;border-radius:6px;min-height:28px;cursor:pointer}
 .style button.on{background:#3a3e47;color:var(--ink)}
+.edtag{font-size:10.5px;font-weight:800;letter-spacing:.03em;padding:2px 6px;border-radius:4px;background:rgba(61,220,132,.16);color:var(--ok)}
+.edcheck{background:none;border:0;color:#7cc4ff;font-size:12px;padding:4px 0;cursor:pointer;min-height:28px}
 #toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#2b2f37;border:1px solid var(--line);padding:10px 16px;border-radius:12px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s;width:max-content;max-width:90vw;z-index:9}
 #toast.show{opacity:1}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -198,7 +200,7 @@ details ol{margin-top:6px}
       <h2>Streamers <span class="n" id="stCount"></span></h2>
       <div class="row"><input type="text" id="addIn" placeholder="Twitch username" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn primary" id="addBtn">Add</button></div>
       <div class="err" id="addErr"></div>
-      <p class="mute small" style="margin-top:8px"><b>Hype</b> clips when chat explodes. <b>Talk</b> is for streamers whose best moments are deep or real talks: it watches for chat agreeing (“so real”, “facts”, 🙏) and makes 60-second clips so the moment has context. Talk still catches funny moments too.</p>
+      <p class="mute small" style="margin-top:8px"><b>EDITOR ✓</b> means the streamer made you an editor: those clips download automatically, ClipKit Batch can pull them in, and you can clip any moment from their VODs. <b>Hype</b> clips when chat explodes. <b>Talk</b> is for streamers whose best moments are deep or real talks: it watches for chat agreeing (“so real”, “facts”, 🙏) and makes 60-second clips so the moment has context. Talk still catches funny moments too.</p>
       <div id="stList" style="margin-top:8px"></div>
     </section>
 
@@ -252,7 +254,7 @@ details ol{margin-top:6px}
 
     <section class="card">
       <h2>Use on another device</h2>
-      <p class="mute small">This link opens the auto clipper already signed in. Keep it private: anyone with it can control your clipper.</p>
+      <p class="mute small">This link opens the auto clipper already signed in. Paste it into <b>ClipKit → Batch → Get clips from my auto clipper</b> to pull in clips from channels you edit. Keep it private: anyone with it can control your clipper.</p>
       <button class="btn wide" id="copyLink">Copy my private link</button>
       <button class="btn wide" id="logout" style="margin-top:8px">Disconnect Twitch</button>
     </section>
@@ -303,7 +305,7 @@ function render() {
     const pct = x.live && x.base ? Math.min(100, Math.round(x.rate / (x.base * 3) * 100)) : 0;
     const sub = x.live ? `${esc(x.game || 'Live')} · ${Number(x.viewers || 0).toLocaleString()} watching · ${x.clips} clip${x.clips === 1 ? '' : 's'} this stream` : 'Offline';
     const chat = x.live ? (x.base == null ? 'Learning normal chat speed…' : `${x.rate} people chatting now · normal ${x.base}` + (x.style === 'talk' ? ` · ${x.agree} agreeing` : '')) : '';
-    return `<div class="st"><img src="${esc(x.avatar)}" alt="" loading="lazy"><div><b>${esc(x.name)} <span class="badge${x.live ? '' : ' off'}">${x.live ? 'LIVE' : 'OFF'}</span></b><small>${sub}</small>${x.live ? `<small>${chat}</small><div class="meter"><i style="width:${pct}%"></i></div>` : ''}<div class="style" role="group" aria-label="Clip style for ${esc(x.name)}"><button data-style="hype" data-sid="${esc(x.id)}" class="${x.style !== 'talk' ? 'on' : ''}">Hype</button><button data-style="talk" data-sid="${esc(x.id)}" class="${x.style === 'talk' ? 'on' : ''}">Talk</button></div></div><div class="acts">${x.live ? `<button class="btn mini" data-clip="${esc(x.id)}">Clip now</button>` : ''}<button class="btn mini" data-rm="${esc(x.id)}" aria-label="Remove ${esc(x.name)}">✕</button></div></div>`;
+    return `<div class="st"><img src="${esc(x.avatar)}" alt="" loading="lazy"><div><b>${esc(x.name)} <span class="badge${x.live ? '' : ' off'}">${x.live ? 'LIVE' : 'OFF'}</span>${x.editor === true ? ' <span class="edtag">EDITOR ✓</span>' : ''}</b><small>${sub}</small>${x.live ? `<small>${chat}</small><div class="meter"><i style="width:${pct}%"></i></div>` : ''}<div class="style" role="group" aria-label="Clip style for ${esc(x.name)}"><button data-style="hype" data-sid="${esc(x.id)}" class="${x.style !== 'talk' ? 'on' : ''}">Hype</button><button data-style="talk" data-sid="${esc(x.id)}" class="${x.style === 'talk' ? 'on' : ''}">Talk</button></div>${x.editor === true ? '' : `<div><button class="edcheck" data-edcheck="${esc(x.id)}">${x.editor === false ? 'Not an editor yet · check again' : 'Check editor access'}</button></div>`}</div><div class="acts">${x.live ? `<button class="btn mini" data-clip="${esc(x.id)}">Clip now</button>` : ''}<button class="btn mini" data-rm="${esc(x.id)}" aria-label="Remove ${esc(x.name)}">✕</button></div></div>`;
   }).join('') : '<div class="empty">No streamers yet. Add a few you like to clip.</div>';
   $('#clipCount').textContent = s.clips.length ? `${s.clips.length}` : '';
   $('#clipList').innerHTML = s.clips.length ? s.clips.map((c) => {
@@ -359,8 +361,9 @@ async function addStreamer() {
 $('#addBtn').onclick = addStreamer;
 $('#addIn').addEventListener('keydown', (e) => { if (e.key === 'Enter') addStreamer(); });
 $('#stList').onclick = async (e) => {
-  const rm = e.target.closest('[data-rm]'), cl = e.target.closest('[data-clip]'), sty = e.target.closest('[data-style]');
+  const rm = e.target.closest('[data-rm]'), cl = e.target.closest('[data-clip]'), sty = e.target.closest('[data-style]'), ed = e.target.closest('[data-edcheck]');
   try {
+    if (ed) { ed.disabled = true; ed.textContent = 'Checking…'; const r = await api('/api/streamers/check-editor', { id: ed.dataset.edcheck }); toast(r.editor ? "You're an editor! Their clips download automatically now." : r.editor === false ? "Not an editor for this channel yet." : "Couldn't tell yet: this channel has no clips to test with."); refresh(); return; }
     if (sty) { await api('/api/streamers/style', { id: sty.dataset.sid, style: sty.dataset.style }); toast(sty.dataset.style === 'talk' ? 'Talk style: clips the deep moments when chat agrees (“so real”, 🙏), 60 seconds long.' : 'Hype style: clips when chat explodes.'); refresh(); return; }
     if (rm) { await api('/api/streamers/remove', { id: rm.dataset.rm }); refresh(); }
     if (cl) { cl.disabled = true; await api('/api/clip-now', { id: cl.dataset.clip }); toast('Clipping… it shows up below in a few seconds.'); refresh(); }
@@ -436,10 +439,29 @@ function renderTrend() {
   $('#tList').innerHTML = list.map((c) => {
     const age = ago(Date.parse(c.created));
     const vod = c.video && c.vodOffset != null ? vodTime(c.vodOffset) : null;
-    return `<div class="tr"><div class="thumb" style="background-image:url('${esc(c.thumb)}')"><span>${Math.round(c.duration)}s</span></div><div><b>${esc(c.title)}</b><small>${esc(c.name)} · clipped by ${esc(c.by)}${c.mine ? ' (your auto clipper)' : ''}</small><small><span class="hot">${num(c.perHour)}/hour</span> · ${num(c.views)} views · ${age}</small><div class="acts"><a class="btn mini" href="${esc(c.url)}" target="_blank" rel="noopener">Watch</a>${vod ? `<a class="btn mini" href="https://www.twitch.tv/videos/${esc(c.video)}?t=${vod.q}" target="_blank" rel="noopener">VOD at ${vod.label}</a>` : ''}<button class="btn mini" data-hide="${esc(c.id)}" aria-label="Hide this clip">Hide</button></div></div></div>`;
+    return `<div class="tr"><div class="thumb" style="background-image:url('${esc(c.thumb)}')"><span>${Math.round(c.duration)}s</span></div><div><b>${esc(c.title)}</b><small>${esc(c.name)} · clipped by ${esc(c.by)}${c.mine ? ' (your auto clipper)' : ''}</small><small><span class="hot">${num(c.perHour)}/hour</span> · ${num(c.views)} views · ${age}</small><div class="acts"><a class="btn mini" href="${esc(c.url)}" target="_blank" rel="noopener">Watch</a>${vodButton(c)}<button class="btn mini" data-hide="${esc(c.id)}" aria-label="Hide this clip">Hide</button></div></div></div>`;
   }).join('');
 }
-$('#tList').onclick = (e) => { const b = e.target.closest('[data-hide]'); if (!b) return; hidden.add(b.dataset.hide); saveHidden(); renderTrend(); };
+$('#tList').onclick = async (e) => { if (await onVodClick(e)) return; const b = e.target.closest('[data-hide]'); if (!b) return; hidden.add(b.dataset.hide); saveHidden(); renderTrend(); };
+
+/* ---------- editor: clip straight from the VOD ---------- */
+const isEditor = (bid) => !!(S && S.streamers.some((s) => s.id === bid && s.editor === true));
+const isTalk = (bid) => !!(S && S.streamers.some((s) => s.id === bid && s.style === 'talk'));
+function vodButton(c) {
+  if (!c.video || c.vodOffset == null) return '';
+  const vod = vodTime(c.vodOffset);
+  if (!isEditor(c.bid)) return `<a class="btn mini" href="https://www.twitch.tv/videos/${esc(c.video)}?t=${vod.q}" target="_blank" rel="noopener">Clip it yourself (VOD ${vod.label})</a>`;
+  const dur = isTalk(c.bid) ? 60 : Math.min(60, Math.round(c.duration) + 8);
+  const end = Math.round(c.vodOffset + c.duration + 3);
+  return `<button class="btn mini primary" data-vod="${esc(c.video)}" data-bid="${esc(c.bid)}" data-end="${end}" data-dur="${dur}" data-title="${esc(c.title)}">Clip it now (${dur}s)</button>`;
+}
+async function onVodClick(e) {
+  const b = e.target.closest('[data-vod]'); if (!b) return false;
+  b.disabled = true; b.textContent = 'Clipping…';
+  try { await api('/api/vodclip', { broadcaster_id: b.dataset.bid, video_id: b.dataset.vod, end: +b.dataset.end, duration: +b.dataset.dur, title: b.dataset.title }); b.textContent = 'Clipped ✓'; toast('Clipped. It shows up on the Auto clips tab and downloads automatically.'); }
+  catch (err) { b.disabled = false; b.textContent = 'Clip it now'; toast(err.message); }
+  return true;
+}
 
 /* ---------- Best picks: score the trending clips ---------- */
 const median = (a) => { if (!a.length) return 0; const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
@@ -497,12 +519,12 @@ function renderBest() {
   $('#bestNote').textContent = picks.length ? `Ranked ${tData.clips.filter((c) => !hidden.has(c.id)).length} clips by how fast they're growing, how they compare with the streamer's usual clips, how many people clipped the same moment, total views and length. Clips of the same moment are merged.` : '';
   $('#bestList').innerHTML = picks.length ? picks.map((m) => {
     const c = m.best, vod = c.video && c.vodOffset != null ? vodTime(c.vodOffset) : null;
-    return `<div class="pick"><div class="score" title="Score out of 100">${Math.min(99, m.score)}</div><div><b>${esc(c.title)}</b><small class="mute">${esc(c.name)} · ${ago(m.t)} · ${num(m.views)} views${m.clips.length > 1 ? ` across ${m.clips.length} clips` : ''}</small><div class="why">${m.why.map((w) => `<em class="${w.top ? 'top' : ''}">${esc(w.t)}</em>`).join('')}</div><div class="thumb" style="background-image:url('${esc(c.thumb)}')"><span>${Math.round(c.duration)}s</span></div><div class="acts" style="margin-top:8px;flex-wrap:wrap"><a class="btn mini" href="${esc(c.url)}" target="_blank" rel="noopener">Watch</a>${vod ? `<a class="btn mini" href="https://www.twitch.tv/videos/${esc(c.video)}?t=${vod.q}" target="_blank" rel="noopener">Clip it yourself (VOD ${vod.label})</a>` : ''}<button class="btn mini" data-hide="${esc(c.id)}">Hide</button></div></div></div>`;
+    return `<div class="pick"><div class="score" title="Score out of 100">${Math.min(99, m.score)}</div><div><b>${esc(c.title)}</b><small class="mute">${esc(c.name)} · ${ago(m.t)} · ${num(m.views)} views${m.clips.length > 1 ? ` across ${m.clips.length} clips` : ''}</small><div class="why">${m.why.map((w) => `<em class="${w.top ? 'top' : ''}">${esc(w.t)}</em>`).join('')}</div><div class="thumb" style="background-image:url('${esc(c.thumb)}')"><span>${Math.round(c.duration)}s</span></div><div class="acts" style="margin-top:8px;flex-wrap:wrap"><a class="btn mini" href="${esc(c.url)}" target="_blank" rel="noopener">Watch</a>${vodButton(c)}<button class="btn mini" data-hide="${esc(c.id)}">Hide</button></div></div></div>`;
   }).join('') : '<div class="empty">No clips to rank yet. Try a longer time range or add more streamers.</div>';
 }
 $('#bestBtn').onclick = async () => { if (!tData) await loadTrend(); renderBest(); if (tData) $('#bestCard').scrollIntoView({ behavior: 'smooth', block: 'start' }); };
 $('#bestClose').onclick = () => { $('#bestCard').hidden = true; };
-$('#bestList').onclick = (e) => { const b = e.target.closest('[data-hide]'); if (!b) return; hidden.add(b.dataset.hide); saveHidden(); renderTrend(); renderBest(); };
+$('#bestList').onclick = async (e) => { if (await onVodClick(e)) return; const b = e.target.closest('[data-hide]'); if (!b) return; hidden.add(b.dataset.hide); saveHidden(); renderTrend(); renderBest(); };
 
 /* ---------- Discord ---------- */
 const myTz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (e) { return ''; } })();
