@@ -223,8 +223,13 @@ body.mmbusy .tabs,body.mmbusy #mmSettings,body.mmbusy #mmPick{pointer-events:non
 
     <section>
       <h3>Title</h3>
-      <label>Title on top<input id="hookText" maxlength="80" placeholder="e.g. Clix asks Kimchi his net worth" autocomplete="off"></label>
-      <label>Show the title<select id="hookWhen"><option value="all">Whole video</option><option value="start">First 3 seconds</option></select></label>
+      <label>Title text<input id="hookText" maxlength="80" placeholder="e.g. Clix asks Kimchi his net worth" autocomplete="off"></label>
+      <label>Show it<select id="hookWhen"><option value="all">Whole video</option><option value="start">First 3 seconds</option></select></label>
+      <div class="seg" id="hookBg"><button data-b="white" class="on">White box</button><button data-b="black">Black box</button><button data-b="glass">See-through</button><button data-b="none">No box</button></div>
+      <div class="grid2"><label>Font<select id="hookFont"><option value="Montserrat">Montserrat</option><option value="Anton">Anton</option><option value="Lilita">Lilita One</option></select></label><label class="chk"><input type="checkbox" id="hookUpper"> ALL CAPS</label></div>
+      <label class="row">Size <input type="range" id="hookSize" min="36" max="120" value="66"><span class="v" id="hookSizeV"></span></label>
+      <p class="hint">Drag the title on the preview to move it.</p>
+      <button class="btn" id="hookReset">Move it back to the top</button>
     </section>
 
     <section>
@@ -450,7 +455,7 @@ const S = {
   layout: 'full', split: 0.38, zoom: 1.15,
   boxes: {},
   tw: { mode: 'none', y: 0.76, h: 0.11 },
-  hook: { text: '', when: 'all' },
+  hook: { text: '', when: 'all', x: 0.5, y: 0.12, size: 66, bg: 'white', upper: false, font: 'Montserrat' },
   cap: { on: true, font: 'Montserrat', size: 86, y: 0.7, per: 3, hi: '#ffd23f', upper: true, yTouched: false },
   words: [], groups: [], exporting: false
 };
@@ -591,7 +596,8 @@ function draw() {
   renderVideo(ctx, video, S.layout, 1);
   coverTwitchCaps(ctx);
   if (S.cap.on) drawCaps(video.currentTime);
-  if (S.hook.text.trim() && (S.hook.when === 'all' || video.currentTime - S.inT < 3.2)) drawHook(ctx, S.hook.text.trim());
+  if (S.hook.text.trim() && (S.hook.when === 'all' || video.currentTime - S.inT < 3.2)) hookRect = drawHook(ctx, S.hook.text.trim(), S.hook); else hookRect = null;
+  cv.style.touchAction = hookRect ? 'none' : ''; // lets you drag the title on a phone
 }
 function activeGroupIndex(t, G = S.groups) {
   for (let i = 0; i < G.length; i++) {
@@ -794,8 +800,42 @@ $('#twCap').onchange = (e) => {
 $('#twY').oninput = (e) => { S.tw.y = e.target.value / 100; S.cap.y = S.tw.y; S.cap.yTouched = true; syncCapUI(); syncTw(); redraw(); };
 $('#twH').oninput = (e) => { S.tw.h = e.target.value / 100; syncTw(); redraw(); };
 syncTw();
+let hookRect = null, hookDragged = false;
+function saveHook() { try { const { text, ...st } = S.hook; localStorage.setItem('clipkit-hook', JSON.stringify(st)); } catch (e) {} }
+try { Object.assign(S.hook, JSON.parse(localStorage.getItem('clipkit-hook') || '{}'), { text: '' }); } catch (e) {}
+function syncHook() {
+  const h = S.hook;
+  $('#hookWhen').value = h.when; $('#hookFont').value = h.font; $('#hookUpper').checked = h.upper;
+  $('#hookSize').value = h.size; $('#hookSizeV').textContent = h.size;
+  for (const b of $('#hookBg').children) b.classList.toggle('on', b.dataset.b === h.bg);
+}
+syncHook();
+const hookChanged = () => { saveHook(); if (video.paused) draw(); };
 $('#hookText').oninput = (e) => { S.hook.text = e.target.value; if (video.paused) draw(); };
-$('#hookWhen').onchange = (e) => { S.hook.when = e.target.value; if (video.paused) draw(); };
+$('#hookWhen').onchange = (e) => { S.hook.when = e.target.value; hookChanged(); };
+$('#hookFont').onchange = (e) => { S.hook.font = e.target.value; hookChanged(); };
+$('#hookUpper').onchange = (e) => { S.hook.upper = e.target.checked; hookChanged(); };
+$('#hookSize').oninput = (e) => { S.hook.size = +e.target.value; $('#hookSizeV').textContent = e.target.value; hookChanged(); };
+$('#hookBg').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; S.hook.bg = b.dataset.b; syncHook(); hookChanged(); };
+$('#hookReset').onclick = () => { S.hook.x = HOOK_DEF.x; S.hook.y = HOOK_DEF.y; hookChanged(); };
+// drag the title around on the preview
+cv.addEventListener('pointerdown', (e) => {
+  if (!hookRect || S.exporting) return;
+  const R = cv.getBoundingClientRect(), k = OW / R.width, px = (e.clientX - R.left) * k, py = (e.clientY - R.top) * k, h = hookRect, m = 24;
+  if (px < h.x - m || px > h.x + h.w + m || py < h.y - m || py > h.y + h.h + m) return;
+  e.preventDefault();
+  const st = { px, py, x: S.hook.x, y: S.hook.y }; let moved = false;
+  cv.setPointerCapture(e.pointerId);
+  const move = (ev) => {
+    const nx = (ev.clientX - R.left) * k, ny = (ev.clientY - R.top) * k;
+    if (Math.abs(nx - st.px) + Math.abs(ny - st.py) > 6) moved = true;
+    S.hook.x = Math.max(0.05, Math.min(0.95, st.x + (nx - st.px) / OW));
+    S.hook.y = Math.max(0.02, Math.min(0.98, st.y + (ny - st.py) / OH));
+    if (video.paused) draw();
+  };
+  const up = () => { cv.removeEventListener('pointermove', move); cv.removeEventListener('pointerup', up); cv.removeEventListener('pointercancel', up); if (moved) { hookDragged = true; saveHook(); } };
+  cv.addEventListener('pointermove', move); cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
+});
 $('#font').onchange = (e) => { S.cap.font = e.target.value; document.fonts.load(`${FONTS[S.cap.font].w} 40px ${FONTS[S.cap.font].css}`).then(redraw); redraw(); };
 $('#upper').onchange = (e) => { S.cap.upper = e.target.checked; redraw(); };
 $('#size').oninput = (e) => { S.cap.size = +e.target.value; $('#sizeV').textContent = e.target.value; redraw(); };
@@ -1541,26 +1581,40 @@ async function transcribeFile(file, model, onStatus) {
     return fixTimes(parseWords(res, 0, len));
   } finally { asrStatus = capStatus; }
 }
-function drawHook(c, text) {
-  if (!text) return;
-  let size = 66; const maxW = OW * 0.8, pad = 30;
+// Title box. st: { x, y (center, 0-1), size, bg: white|black|glass|none, upper, font }. Returns where it was drawn.
+const HOOK_DEF = { x: 0.5, y: 0.12, size: 66, bg: 'white', upper: false, font: 'Montserrat' };
+function drawHook(c, text, st) {
+  if (!text) return null;
+  st = { ...HOOK_DEF, ...(st || {}) };
+  if (st.upper) text = text.toUpperCase();
+  const f = FONTS[st.font] || FONTS.Montserrat, maxW = OW * 0.8;
+  let size = st.size;
   const wrap = () => {
-    c.font = `900 ${size}px "Montserrat", sans-serif`;
+    c.font = `${f.w} ${size}px ${f.css}`;
     const lines = [[]]; let lw = 0; const sp = c.measureText(' ').width;
     for (const w of text.split(/\s+/)) { const mw = c.measureText(w).width, add = (lines[lines.length - 1].length ? sp : 0) + mw; if (lines[lines.length - 1].length && lw + add > maxW) { lines.push([w]); lw = mw; } else { lines[lines.length - 1].push(w); lw += add; } }
     return lines.map((l) => l.join(' '));
   };
-  let lines = wrap(); while (lines.length > 3 && size > 40) { size -= 6; lines = wrap(); }
-  const lh = size * 1.15, w = Math.min(OW * 0.9, Math.max(...lines.map((l) => c.measureText(l).width)) + pad * 2), h = lines.length * lh + pad * 1.4;
-  const x = (OW - w) / 2, y = OH * 0.09;
+  let lines = wrap(); while (lines.length > 3 && size > 32) { size -= 4; lines = wrap(); }
+  const pad = Math.round(size * 0.45), lh = size * 1.15;
+  const w = Math.min(OW * 0.94, Math.max(...lines.map((l) => c.measureText(l).width)) + pad * 2), h = lines.length * lh + pad * 1.1;
+  const x = Math.max(0, Math.min(OW - w, OW * st.x - w / 2)), y = Math.max(0, Math.min(OH - h, OH * st.y - h / 2));
+  const BOX = { white: ['#fff', '#111'], black: ['rgba(0,0,0,.88)', '#fff'], glass: ['rgba(0,0,0,.42)', '#fff'], none: [null, '#fff'] }[st.bg] || ['#fff', '#111'];
   c.save();
-  c.shadowColor = 'rgba(0,0,0,.35)'; c.shadowBlur = 24; c.shadowOffsetY = 6;
-  c.fillStyle = '#fff'; c.beginPath();
-  if (c.roundRect) c.roundRect(x, y, w, h, 22); else c.rect(x, y, w, h);
-  c.fill(); c.shadowColor = 'transparent';
-  c.fillStyle = '#111'; c.textAlign = 'center'; c.textBaseline = 'middle';
-  lines.forEach((l, i) => c.fillText(l, OW / 2, y + pad * 0.7 + lh * (i + 0.5)));
+  if (BOX[0]) {
+    if (st.bg === 'white') { c.shadowColor = 'rgba(0,0,0,.35)'; c.shadowBlur = 24; c.shadowOffsetY = 6; }
+    c.fillStyle = BOX[0]; c.beginPath();
+    if (c.roundRect) c.roundRect(x, y, w, h, Math.round(size * 0.33)); else c.rect(x, y, w, h);
+    c.fill(); c.shadowColor = 'transparent';
+  }
+  c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round';
+  lines.forEach((l, i) => {
+    const ty = y + pad * 0.55 + lh * (i + 0.5);
+    if (!BOX[0] || st.bg === 'glass') { c.lineWidth = size * (BOX[0] ? 0.1 : 0.2); c.strokeStyle = '#000'; c.strokeText(l, x + w / 2, ty); }
+    c.fillStyle = BOX[1]; c.fillText(l, x + w / 2, ty);
+  });
   c.restore();
+  return { x, y, w, h };
 }
 function bOpts() { return { layout: $('#bLayout').value, caps: $('#bCaps').checked, trim: $('#bTrim').checked, hook: $('#bHook').checked, hookWhen: $('#bHookWhen').value, fps: +$('#bFps').value, model: $('#bModel').value }; }
 function drawBatchFrame(it, t, o) {
