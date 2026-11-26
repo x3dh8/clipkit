@@ -918,8 +918,9 @@ export class Watcher {
         this.env.AI.run('@cf/moondream/moondream3.1-9B-A2B', { task: 'query', image: url, question: 'This is a frame from a livestream. In one short sentence, say what is happening: the setting, what the person is doing or wearing, and what game or scene is on screen. Do not guess anyone\'s name. Do not mention the stream overlay, chat box or webcam border.' }),
         new Promise((_, no) => setTimeout(() => no(new Error('slow')), 20000))]);
       const t = typeof r === 'string' ? r : r && (r.answer || r.caption || r.response || r.result || r.text || r.description);
+      if (!t) this.frameErr = 'no text: ' + JSON.stringify(r).slice(0, 300);
       return String(t || '').replace(/\s+/g, ' ').trim().slice(0, 220);
-    } catch (e) { return ''; }
+    } catch (e) { this.frameErr = String(e && e.message || e).slice(0, 300); return ''; }
   }
   // Llama Guard: true = looks fine, false = break a YouTube rule, null = couldn't check
   async guard(text) {
@@ -1014,7 +1015,7 @@ export class Watcher {
     // last check on what the AI wrote; anything flagged goes back to a plain title
     const vs = await Promise.all(chosen.map((it) => this.guard(`${it.titles.join('\n')}\n${it.description}\n${it.hashtags.join(' ')}\n${it.angle}`)));
     chosen.forEach((it, i) => { if (vs[i] === false) { it.titles = [`${it.name} stream moment`]; it.description = `Clip from ${it.name}'s stream${it.login ? `: twitch.tv/${it.login}` : ''}. All credit to ${it.name}.`; it.hashtags = ['#shorts', ...(it.login ? ['#' + it.login] : [])]; it.angle = ''; } });
-    if (preview) return { ok: true, preview: chosen.map((it) => ({ name: it.name, game: it.game, streamTitle: it.streamTitle, scene: it.scene, titles: it.titles, hashtags: it.hashtags, angle: it.angle })) };
+    if (preview) return { ok: true, frameErr: this.frameErr || '', thumbs: chosen.map((it) => it.thumb), preview: chosen.map((it) => ({ name: it.name, game: it.game, streamTitle: it.streamTitle, scene: it.scene, titles: it.titles, hashtags: it.hashtags, angle: it.angle })) };
     this.queue = { at: this.now(), items: chosen }; await this.st.put('queue', this.queue);
     const how = (it) => it.ready ? '📥 **Ready:** pull it into ClipKit Batch with *Get clips from my auto clipper*.'
       : it.kind === 'mine' ? '📥 Download it from your Clips Manager (Clips I\'ve created), then add it in ClipKit Batch.'
