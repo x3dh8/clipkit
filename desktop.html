@@ -128,8 +128,25 @@ body.mbusy #mview .pane:first-child,body.mbusy #mview aside section:not(.exp),bo
 body.bbusy .tabs,body.bbusy #bview .bset,body.bbusy #bAdd{pointer-events:none;opacity:.6}
 a.btn{color:var(--ink)}
 a.btn.primary{color:#fff}
-#toast{#bview canvas#bout{width:100%;aspect-ratio:9/16;background:#000;border-radius:12px;display:block}
+#bview canvas#bout{width:100%;aspect-ratio:9/16;background:#000;border-radius:12px;display:block}
 #bview .mlist{flex:1;overflow:auto;display:flex;flex-direction:column;gap:8px;min-height:160px;background:#0b0c0e;border-radius:12px;padding:10px}
+.mm{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.mm.off{opacity:.5}
+.mmtop{display:flex;gap:8px;align-items:center}
+.mmscore{flex:none;width:34px;height:34px;border-radius:9px;background:var(--hi);color:#111;font:900 16px Montserrat,sans-serif;display:flex;align-items:center;justify-content:center}
+.mmtop input[data-mt]{flex:1;background:#1b1d22;border:1px solid var(--line);border-radius:8px;padding:7px 9px;font-size:16px;font-weight:600;min-width:0}
+.mmpick{display:flex;align-items:center;gap:5px;font-size:13px;flex:none;cursor:pointer}
+.mmpick input{width:18px;height:18px;accent-color:var(--acc)}
+.mm small{color:var(--mute);font-size:12.5px}
+.mmtype{color:var(--hi);text-transform:capitalize;font-weight:600}
+.mmq{margin:0;font-size:13px;line-height:1.45;color:#c9ccd3;font-style:italic}
+.mm .acts{display:flex;gap:6px;flex-wrap:wrap}
+#mmPlayer video{width:100%;max-height:42vh;background:#000;border-radius:10px;display:block}
+body.mmbusy .tabs,body.mmbusy #mmSettings,body.mmbusy #mmPick{pointer-events:none;opacity:.6}
+#mmview{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.25fr);gap:16px;padding:16px 20px;height:calc(100vh - 56px)}
+#mmview .pane{overflow:auto}
+#mmList{display:flex;flex-direction:column;gap:10px;overflow:auto;flex:1;min-height:160px}
+@media(max-width:1000px){#mmview{grid-template-columns:1fr;height:auto}}
 #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#2b2f37;border:1px solid var(--line);padding:10px 16px;border-radius:10px;font-size:13.5px;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90vw}
 #toast.show{opacity:1}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -138,7 +155,7 @@ a.btn.primary{color:#fff}
 <body>
 <header>
   <div class="logo">Clip<b>Kit</b></div>
-  <div class="tabs" id="tabs"><button data-v="clip" class="on">Clip</button><button data-v="montage">Montage</button><button data-v="batch">Batch</button></div>
+  <div class="tabs" id="tabs"><button data-v="clip" class="on">Clip</button><button data-v="montage">Montage</button><button data-v="batch">Batch</button><button data-v="moments">Moments</button></div>
   <div id="fname"></div>
   <button class="btn" id="openBtn">Open clip</button>
   <input type="file" id="fileIn" accept="video/*,.mkv,.mov" hidden>
@@ -333,6 +350,32 @@ a.btn.primary{color:#fff}
       <p class="hint">Each video is made in real time, so 10 clips of 30 seconds take about 6 to 7 minutes including captions. Keep this tab in front.</p>
     </section>
   </aside>
+</main>
+<main id="mmview" hidden>
+  <section class="pane">
+    <div class="label">Long video: a podcast, Just Chatting stream or interview</div>
+    <div class="madd" style="margin:0"><button class="btn primary" id="mmPick">Choose a long video</button><span class="hint" id="mmName" style="margin:0;align-self:center"></span><input type="file" id="mmFile" accept="video/*,.mkv,.mov" hidden></div>
+    <div id="mmPlayer" hidden><video id="mmVid" controls playsinline preload="metadata"></video></div>
+    
+      <div id="mmSettings">
+        <div class="grid2" style="margin-top:0">
+          <label>What kind<select id="mmKind"><option value="any">Best of anything</option><option value="funny">Funny</option><option value="takes">Hot takes</option><option value="stories">Stories</option><option value="deep">Deep / real talk</option></select></label>
+          <label>Length<select id="mmLen"><option value="short">Short (15–35s)</option><option value="medium" selected>Medium (25–60s)</option><option value="long">Long (45–90s)</option></select></label>
+        </div>
+        <div class="grid2">
+          <label>How many<select id="mmCount"><option>5</option><option selected>10</option><option>15</option><option>20</option></select></label>
+          <label>Language<select id="mmLang"><option value="">Detect it</option><option value="en">English</option><option value="es">Spanish</option><option value="pt">Portuguese</option><option value="fr">French</option><option value="de">German</option></select></label>
+        </div>
+      </div>
+    <button class="btn primary wide" id="mmGo" disabled>Find moments</button>
+    <div class="status" id="mmStatus" hidden><div class="bar"><i></i></div><span></span></div>
+    <div id="mmLinkRow" hidden style="margin-top:10px"><p class="hint">Moments uses AI on your Cloudflare account through your auto clipper. Paste its private link, from its “Use on another device” section. You only do this once.</p><div class="split" style="margin-top:6px"><input type="text" id="mmLink" placeholder="Auto clipper private link" autocomplete="off" style="flex:1;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-height:40px;font-size:16px"><button class="btn primary" id="mmLinkSave" style="flex:none">Connect</button></div></div>
+    <p class="hint">AI listens to the whole video, then picks the parts that work on their own as short videos. It costs about 5 cents per hour of video on your Cloudflare account.</p>
+  </section>
+  <section class="pane">
+    <div class="label" style="display:flex;align-items:center;gap:8px">Moments <span id="mmCount2"></span><button class="btn primary" id="mmMake" style="margin-left:auto" disabled>Make videos</button></div>
+    <div id="mmList"></div>
+  </section>
 </main>
 <div id="toast" role="status"></div>
 
@@ -1022,11 +1065,12 @@ function setView(v) {
   for (const b of $('#tabs').children) b.classList.toggle('on', b.dataset.v === v);
   $('#mview').hidden = v !== 'montage';
   $('#bview').hidden = v !== 'batch';
+  $('#mmview').hidden = v !== 'moments';
   $('#empty').hidden = v !== 'clip' || !!S.file;
   $('#app').hidden = v !== 'clip' || !S.file;
-  if (v === 'montage') { video.pause(); refreshMontage(); } else if (v === 'batch') { video.pause(); renderBList(); } else { sizeStage(); drawStrip(); }
+  if (v === 'montage') { video.pause(); refreshMontage(); } else if (v === 'batch') { video.pause(); renderBList(); } else if (v === 'moments') { video.pause(); mmRender(); } else { sizeStage(); drawStrip(); }
 }
-$('#tabs').onclick = (e) => { const b = e.target.closest('button'); if (b && !M.running && !S.exporting && !B.running) setView(b.dataset.v); };
+$('#tabs').onclick = (e) => { const b = e.target.closest('button'); if (b && !M.running && !S.exporting && !B.running && !MM.running) setView(b.dataset.v); };
 
 /* ---------- montage ---------- */
 const M = { items: [], song: null, songName: '', beats: [], bpm: 0, drop: null, songStart: 0, peaks: null, running: false, stop: false, plan: null };
@@ -1494,15 +1538,16 @@ async function makeOne(it, o, idx, total) {
   if (bv.src !== it.url) { bv.src = it.url; await new Promise((r, j) => { bv.onloadeddata = r; bv.onerror = () => j(new Error("Couldn't open this video.")); }); }
   const prefix = `Clip ${idx + 1} of ${total}: `;
   it.groups = [];
-  if (o.caps) {
+  if (it.seg) { it.groups = o.caps ? it.seg.groups : []; }
+  else if (o.caps) {
     try {
       const words = await transcribeFile(it.file, o.model, (text, p) => { it.msg = text; bStatusLine(prefix + text, p); renderBListMsg(it); });
       it.groups = buildGroups(words);
       it.note = words.length ? '' : 'no speech found, so no captions';
     } catch (err) { it.groups = []; it.note = 'captions failed, made it without them'; }
   }
-  it.start = 0;
-  if (o.trim) {
+  it.start = it.seg ? it.seg.start : 0;
+  if (o.trim && !it.seg) {
     it.msg = 'Finding where the action starts…'; renderBListMsg(it); bStatusLine(prefix + it.msg, null);
     try { it.start = await findActionStart(it); } catch (e) { it.start = 0; }
     if (it.start > 0) it.note = (it.note ? it.note + ' · ' : '') + `cut ${it.start.toFixed(1)}s from the start`;
@@ -1517,7 +1562,7 @@ async function makeOne(it, o, idx, total) {
   const parts = []; rec.ondataavailable = (e) => { if (e.data.size) parts.push(e.data); };
   rec.start(500);
   await bv.play();
-  const dur = bv.duration || 60, s0 = it.start || 0, span = Math.max(0.1, dur - s0);
+  const dur = it.seg ? Math.min(it.seg.end, bv.duration || it.seg.end) : (bv.duration || 60), s0 = it.start || 0, span = Math.max(0.1, dur - s0);
   await new Promise((res) => {
     const f = () => {
       const t = bv.currentTime;
@@ -1525,7 +1570,7 @@ async function makeOne(it, o, idx, total) {
       const done = Math.min(1, Math.max(0, (t - s0) / span));
       it.msg = `Exporting… ${Math.round(done * 100)}%`; renderBListMsg(it);
       bStatusLine(prefix + it.msg, (idx + done) / total);
-      if (bv.ended || B.stop || bv.paused && t > s0 + 0.1) { res(); return; }
+      if (bv.ended || B.stop || (it.seg && t >= it.seg.end) || bv.paused && t > s0 + 0.1) { res(); return; }
       requestAnimationFrame(f);
     };
     requestAnimationFrame(f);
@@ -1576,6 +1621,7 @@ $('#bGo').onclick = async () => {
 try { const o = JSON.parse(localStorage.getItem('clipkit-batch') || 'null'); if (o) { $('#bLayout').value = o.layout; $('#bCaps').checked = o.caps; $('#bTrim').checked = !!o.trim; $('#bHook').checked = o.hook; $('#bHookWhen').value = o.hookWhen; $('#bFps').value = String(o.fps); $('#bModel').value = o.model; } } catch (e) {}
 renderBList();
 if (location.hash === '#batch') setTimeout(() => setView('batch'), 0);
+if (location.hash === '#moments') setTimeout(() => setView('moments'), 0);
 
 /* ---------- pull clips from the auto clipper (channels you edit) ---------- */
 const genericTitle = (t) => !t || /^(hype moment|best moment|.{1,18} moment)$/i.test(t);
@@ -1616,6 +1662,154 @@ $('#bLinkSave').onclick = () => {
   try { const u = new URL(v); if (!/key=[a-f0-9]+/.test(u.hash)) throw 0; localStorage.setItem('clipkit-ac', v); }
   catch (e) { toast("Paste the private link from your auto clipper's “Use on another device” section."); return; }
   $('#bLink').value = ''; $('#bLinkRow').hidden = true; pullClips(acConf());
+};
+
+/* ---------- Moments: AI finds the best parts of long talking videos ---------- */
+const MM = { file: null, url: '', words: [], segs: [], moments: [], running: false, stop: false, previewEnd: 0 };
+const mmv = $('#mmVid');
+function mmStatus(t, p) { mStatus('#mmStatus', t, p); }
+function mmLoad(f) {
+  if (!f || MM.running) return;
+  if (!/^video\//.test(f.type) && !/\.(mp4|mov|webm|mkv|m4v)$/i.test(f.name)) { toast("That doesn't look like a video file."); return; }
+  if (MM.url) URL.revokeObjectURL(MM.url);
+  Object.assign(MM, { file: f, url: URL.createObjectURL(f), words: [], segs: [], moments: [] });
+  mmv.src = MM.url; $('#mmName').textContent = f.name; $('#mmPlayer').hidden = false;
+  $('#mmGo').disabled = false; mmRender();
+  mmStatus('Ready. Pick what kind of moments you want, then tap Find moments.', null);
+}
+$('#mmPick').onclick = () => $('#mmFile').click();
+$('#mmFile').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; mmLoad(f); };
+function wavFrom(pcm) {
+  const n = pcm.length, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, 16000, true); v.setUint32(28, 32000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) { const s = Math.max(-1, Math.min(1, pcm[i])); v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true); }
+  return buf;
+}
+function snapMoment(m) {
+  const S = MM.segs; if (!S.length) return null;
+  let a = m.start, b = m.end;
+  const sa = S.reduce((x, s) => (Math.abs(s.start - m.start) < Math.abs(x.start - m.start) ? s : x), S[0]);
+  const sb = S.reduce((x, s) => (Math.abs(s.end - m.end) < Math.abs(x.end - m.end) ? s : x), S[0]);
+  if (Math.abs(sa.start - m.start) <= 6) a = sa.start;
+  if (Math.abs(sb.end - m.end) <= 6) b = sb.end;
+  if (b - a < 8) return null;
+  return { ...m, start: Math.max(0, a - 0.15), end: b + 0.35 };
+}
+async function mmFind() {
+  if (MM.running) { MM.stop = true; return; }
+  const c = acConf();
+  if (!c) { $('#mmLinkRow').hidden = false; $('#mmLink').focus(); return; }
+  MM.running = true; MM.stop = false; $('#mmGo').textContent = 'Stop'; document.body.classList.add('mmbusy');
+  try {
+    if (!MM.segs.length) {
+      mmStatus('Reading the audio…', null);
+      let pcm;
+      try { pcm = await decodePCM(MM.file); } catch (e) { throw new Error("couldn't read the audio in this video."); }
+      const CH = 180 * 16000, n = Math.ceil(pcm.length / CH), segs = [], jobs = [...Array(n).keys()], total = pcm.length / 16000;
+      let done = 0;
+      const lang = $('#mmLang').value;
+      const run = async () => {
+        while (jobs.length && !MM.stop) {
+          const k = jobs.shift(), part = pcm.subarray(k * CH, Math.min(pcm.length, (k + 1) * CH));
+          let r, tries = 0;
+          for (;;) {
+            try {
+              r = await fetch(c.origin + '/api/ai/transcribe' + (lang ? '?lang=' + lang : ''), { method: 'POST', headers: { 'x-clipkit-key': c.key, 'content-type': 'audio/wav' }, body: wavFrom(part) });
+              if (r.status === 401) throw new Error('auth');
+              if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'error ' + r.status);
+              break;
+            } catch (e) { if (e.message === 'auth' || ++tries >= 3) throw e; await new Promise((z) => setTimeout(z, 1500 * tries)); }
+          }
+          const j = await r.json(), off = k * 180;
+          for (const s of j.segments) segs.push({ start: s.start + off, end: s.end + off, text: s.text, words: s.words ? s.words.map((w) => ({ t: w.w, s: w.s + off, e: w.e + off })) : null });
+          done++;
+          mmStatus(`Transcribing… ${Math.round(done / n * 100)}% (${fmt(Math.min(total, done * 180))} of ${fmt(total)})`, done / n * 0.7);
+        }
+      };
+      await Promise.all([run(), run(), run()]);
+      if (MM.stop) throw new Error('stopped');
+      segs.sort((a, b) => a.start - b.start);
+      MM.segs = segs; MM.words = [];
+      for (const s of segs) {
+        if (s.words && s.words.length) MM.words.push(...s.words);
+        else { const toks = s.text.split(/\s+/).filter(Boolean), d = Math.max(0.05, s.end - s.start) / Math.max(1, toks.length); toks.forEach((t, i) => MM.words.push({ t, s: s.start + i * d, e: s.start + (i + 1) * d })); }
+      }
+      if (!segs.length) throw new Error('no speech found in this video.');
+    }
+    const kind = $('#mmKind').value, len = $('#mmLen').value, want = +$('#mmCount').value;
+    const lines = MM.segs.map((s) => ({ t: s.start, text: s.text }));
+    const W = 600, end = MM.segs[MM.segs.length - 1].end, wins = [];
+    for (let a = 0; a < end; a += W - 60) { const L = lines.filter((l) => l.t >= a && l.t < a + W); if (L.length > 3) wins.push(L); if (a + W >= end) break; }
+    const per = Math.max(2, Math.min(5, Math.ceil(want * 1.6 / Math.max(1, wins.length))));
+    let found = [], k = 0;
+    for (const L of wins) {
+      if (MM.stop) throw new Error('stopped');
+      mmStatus(`AI is picking the best moments… part ${++k} of ${wins.length}`, 0.7 + 0.3 * (k - 1) / wins.length);
+      try {
+        const r = await fetch(c.origin + '/api/ai/moments', { method: 'POST', headers: { 'x-clipkit-key': c.key, 'content-type': 'application/json' }, body: JSON.stringify({ lines: L, kind, len, count: per }) });
+        const j = await r.json(); if (!r.ok) throw new Error(j.error || 'error');
+        found.push(...j.moments);
+      } catch (e) { toast('One part failed: ' + e.message); }
+    }
+    found = found.map(snapMoment).filter(Boolean).sort((a, b) => b.score - a.score);
+    const keep = [];
+    for (const m of found) {
+      if (keep.some((x) => Math.min(x.end, m.end) - Math.max(x.start, m.start) > 0.4 * Math.min(x.end - x.start, m.end - m.start))) continue;
+      keep.push(m); if (keep.length >= want) break;
+    }
+    MM.moments = keep.map((m, i) => ({ ...m, id: i + 1, pick: true }));
+    mmRender();
+    mmStatus(keep.length ? `Found ${keep.length} moment${keep.length === 1 ? "" : "s"}. Check them, then tap Make videos.` : 'No strong moments found. Try a different "What kind" setting.', keep.length ? 1 : null);
+  } catch (e) {
+    if (e.message === 'auth') { try { localStorage.removeItem('clipkit-ac'); } catch (_) {} $('#mmLinkRow').hidden = false; mmStatus('Your auto clipper link no longer works. Paste it again.', null); }
+    else mmStatus(e.message === 'stopped' ? 'Stopped.' : 'Failed: ' + e.message, null);
+  } finally { MM.running = false; MM.stop = false; $('#mmGo').textContent = 'Find moments'; document.body.classList.remove('mmbusy'); }
+}
+$('#mmGo').onclick = mmFind;
+$('#mmLinkSave').onclick = () => {
+  const v = $('#mmLink').value.trim();
+  try { const u = new URL(v); if (!/key=[a-f0-9]+/.test(u.hash)) throw 0; localStorage.setItem('clipkit-ac', v); }
+  catch (e) { toast("Paste the private link from your auto clipper's “Use on another device” section."); return; }
+  $('#mmLink').value = ''; $('#mmLinkRow').hidden = true; mmFind();
+};
+function mmText(m) { return MM.words.filter((w) => w.s >= m.start - 0.05 && w.s < m.end).map((w) => w.t).join(' '); }
+function mmRender() {
+  const L = $('#mmList');
+  $('#mmMake').disabled = !MM.moments.some((m) => m.pick);
+  $('#mmCount2').textContent = MM.moments.length ? String(MM.moments.length) : '';
+  if (!MM.moments.length) { L.innerHTML = `<div class="mempty"><b>${MM.file ? 'No moments yet' : 'Pick a long video'}</b>${MM.file ? 'Tap Find moments. A 1-hour video takes a few minutes.' : 'A podcast, Just Chatting stream or interview works best. AI listens to the whole thing and picks the parts that work as short videos.'}</div>`; return; }
+  L.innerHTML = MM.moments.map((m, i) => {
+    const t = mmText(m), d = m.end - m.start;
+    return `<div class="mm${m.pick ? '' : ' off'}"><div class="mmtop"><span class="mmscore" title="AI score out of 10">${m.score}</span><input data-mt="${i}" value="${esc(m.title)}" aria-label="Title for moment ${i + 1}"><label class="mmpick"><input type="checkbox" data-mp="${i}"${m.pick ? ' checked' : ''}> Use</label></div>
+      <small><b class="mmtype">${esc(m.type)}</b> · ${fmt(m.start)} – ${fmt(m.end)} (${Math.round(d)}s) · ${esc(m.reason)}</small>
+      <p class="mmq">“${esc(t.length > 260 ? t.slice(0, 260) + '…' : t)}”</p>
+      <div class="acts"><button class="btn mini primary" data-mplay="${i}">▶ Preview</button><button class="btn mini" data-mn="${i}|s|-2">Start −2s</button><button class="btn mini" data-mn="${i}|s|2">Start +2s</button><button class="btn mini" data-mn="${i}|e|-2">End −2s</button><button class="btn mini" data-mn="${i}|e|2">End +2s</button></div></div>`;
+  }).join('');
+}
+$('#mmList').addEventListener('input', (e) => { const i = e.target.dataset.mt; if (i != null) MM.moments[+i].title = e.target.value; });
+$('#mmList').addEventListener('change', (e) => { const i = e.target.dataset.mp; if (i != null) { MM.moments[+i].pick = e.target.checked; mmRender(); } });
+$('#mmList').addEventListener('click', (e) => {
+  const pl = e.target.closest('[data-mplay]'), nu = e.target.closest('[data-mn]');
+  if (pl) { const m = MM.moments[+pl.dataset.mplay]; MM.previewEnd = m.end; mmv.currentTime = m.start; mmv.play().catch(() => {}); $('#mmPlayer').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+  if (nu) {
+    const [i, which, d] = nu.dataset.mn.split('|'), m = MM.moments[+i];
+    if (which === 's') m.start = Math.max(0, Math.min(m.end - 5, m.start + +d)); else m.end = Math.max(m.start + 5, Math.min(mmv.duration || 1e9, m.end + +d));
+    mmRender(); MM.previewEnd = m.end; mmv.currentTime = which === 's' ? m.start : Math.max(m.start, m.end - 4); mmv.play().catch(() => {});
+  }
+});
+mmv.addEventListener('timeupdate', () => { if (MM.previewEnd && mmv.currentTime >= MM.previewEnd) { mmv.pause(); MM.previewEnd = 0; } });
+$('#mmMake').onclick = () => {
+  const picks = MM.moments.filter((m) => m.pick); if (!picks.length) return;
+  for (const m of picks) {
+    const words = MM.words.filter((w) => w.s >= m.start - 0.05 && w.s < m.end);
+    const it = { id: ++bid, file: MM.file, url: URL.createObjectURL(MM.file), name: `${MM.file.name} · ${fmt(m.start)}–${fmt(m.end)}`, hook: m.title, status: 'waiting', msg: '', seg: { start: m.start, end: m.end, groups: buildGroups(words) } };
+    B.items.push(it);
+    thumbAt(it.url, m.start + 1).then((th) => { it.thumb = th; renderBList(); });
+  }
+  mmv.pause(); setView('batch'); renderBList();
+  bStatusLine(`Added ${picks.length} moment${picks.length === 1 ? '' : 's'} with captions ready. Pick a layout, then tap Make all videos.`, null);
 };
 
 /* ---------- export ---------- */

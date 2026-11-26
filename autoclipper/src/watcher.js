@@ -162,8 +162,13 @@ export class Watcher {
   async fetch(req) {
     await this.ready;
     const url = new URL(req.url), path = url.pathname, method = req.method;
-    const body = method === 'POST' ? await req.json().catch(() => ({})) : {};
     const given = req.headers.get('x-clipkit-key') || '';
+    if (path === '/api/ai/transcribe' && method === 'POST') {
+      if (!this.key || given !== this.key) return json({ error: 'Wrong or missing access key.' }, 401);
+      try { return json(await this.aiTranscribe(await req.arrayBuffer(), url.searchParams.get('lang'))); }
+      catch (e) { return json({ error: e.message || String(e) }, 500); }
+    }
+    const body = method === 'POST' ? await req.json().catch(() => ({})) : {};
     try {
       if (path === '/api/setup' && method === 'POST') {
         if (this.key && given !== this.key) return json({ error: 'This auto clipper is already set up. Use your access key.' }, 403);
@@ -219,6 +224,7 @@ export class Watcher {
       }
       if (path === '/api/clips/download' && method === 'POST') return json(await this.download(body.id));
       if (path === '/api/trending') return json(await this.trending(url.searchParams));
+      if (path === '/api/ai/moments' && method === 'POST') return json(await this.aiMoments(body));
       if (path === '/api/streamers/check-editor' && method === 'POST') {
         const s = this.cfg.streamers.find((x) => x.id === body.id); if (!s) return json({ error: 'Unknown streamer' }, 400);
         return json({ editor: await this.checkEditor(s) });
@@ -720,6 +726,50 @@ export class Watcher {
     const headers = { 'content-type': v.headers.get('content-type') || 'video/mp4', 'x-clip-name': name, 'cache-control': 'no-store' };
     if (v.headers.get('content-length')) headers['content-length'] = v.headers.get('content-length');
     return new Response(v.body, { headers });
+  }
+
+
+  /* ---------------- AI for ClipKit's Moments tab ---------------- */
+  ai() { if (!this.env || !this.env.AI) throw new Error('Cloudflare AI is not turned on for this worker yet. Redeploy it from GitHub.'); return this.env.AI; }
+  async aiTranscribe(buf, lang) {
+    if (!buf || buf.byteLength < 100) throw new Error('No audio was sent.');
+    if (buf.byteLength > 25 * 1024 * 1024) throw new Error('Audio piece too big.');
+    const bytes = new Uint8Array(buf); let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    const opts = { audio: btoa(bin), vad_filter: true, condition_on_previous_text: false };
+    if (lang && /^[a-z]{2}$/.test(lang)) opts.language = lang;
+    const r = await this.ai().run('@cf/openai/whisper-large-v3-turbo', opts);
+    const segs = (r.segments || []).map((s) => ({ start: +s.start || 0, end: +s.end || 0, text: String(s.text || '').trim(),
+      words: Array.isArray(s.words) ? s.words.map((w) => ({ w: String(w.word || '').trim(), s: +w.start || 0, e: +w.end || 0 })).filter((w) => w.w) : null })).filter((s) => s.text);
+    return { segments: segs, text: r.text || '' };
+  }
+  async aiMoments(b) {
+    const lines = Array.isArray(b.lines) ? b.lines.slice(0, 900) : [];
+    if (!lines.length) return { moments: [] };
+    const LEN = { short: [15, 35], medium: [25, 60], long: [45, 90] }[b.len] || [25, 60];
+    const KIND = { any: 'any kind that would do well', funny: 'funny moments and jokes', takes: 'bold opinions and hot takes', stories: 'complete stories', deep: 'deep, real or inspiring talk and advice' }[b.kind] || 'any kind that would do well';
+    const count = Math.min(5, Math.max(1, +b.count || 3));
+    const transcript = lines.map((l) => `[${Math.round(+l.t)}] ${String(l.text).slice(0, 400)}`).join('\n');
+    const sys = 'You are an expert short-form video editor. You find the most clip-worthy moments in long talking videos (podcasts, streams, interviews) for TikTok, Reels and Shorts. A great moment works with zero context: a complete funny story, a bold opinion, a surprising fact, a relatable rant, a deep or emotional insight, a heated debate. It starts exactly where the idea starts (never mid-sentence, never with filler) and ends right after the punchline or conclusion. Skip intros, outros, sponsor reads, technical problems, small talk and anything that needs earlier context. Be picky: return fewer moments if few are strong. Titles are short, punchy hooks (max 9 words) that make people want to watch, true to what is said, no emojis, no ALL CAPS.';
+    const user = `Find up to ${count} moments. Focus on: ${KIND}. Each moment must be ${LEN[0]} to ${LEN[1]} seconds long. Use the timestamps (seconds) from the transcript. Transcript lines are "[start seconds] text":\n\n${transcript}`;
+    const schema = { type: 'object', properties: { moments: { type: 'array', items: { type: 'object', properties: {
+      start: { type: 'number' }, end: { type: 'number' }, title: { type: 'string' }, type: { type: 'string', enum: ['funny', 'hot take', 'story', 'insight', 'emotional', 'debate', 'other'] },
+      reason: { type: 'string' }, score: { type: 'integer' } }, required: ['start', 'end', 'title', 'reason', 'score'] } } }, required: ['moments'] };
+    const model = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+    let out;
+    try {
+      const r = await this.ai().run(model, { messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], response_format: { type: 'json_schema', json_schema: schema }, max_tokens: 1200, temperature: 0.3 });
+      out = typeof r.response === 'string' ? JSON.parse(r.response) : r.response;
+    } catch (e) {
+      const r = await this.ai().run(model, { messages: [{ role: 'system', content: sys + ' Reply with only JSON like {"moments":[{"start":12,"end":48,"title":"...","type":"story","reason":"...","score":8}]}.' }, { role: 'user', content: user }], max_tokens: 1200, temperature: 0.3 });
+      const m = String(r.response || '').match(/\{[\s\S]*\}/);
+      try { out = m ? JSON.parse(m[0]) : { moments: [] }; } catch (err) { out = { moments: [] }; }
+    }
+    const first = +lines[0].t, last = +lines[lines.length - 1].t + 30;
+    const moments = (out && Array.isArray(out.moments) ? out.moments : []).map((m) => ({
+      start: +m.start, end: +m.end, title: String(m.title || '').slice(0, 90), type: String(m.type || 'other'), reason: String(m.reason || '').slice(0, 200), score: Math.max(1, Math.min(10, Math.round(+m.score || 5)))
+    })).filter((m) => isFinite(m.start) && isFinite(m.end) && m.end - m.start >= LEN[0] * 0.6 && m.end - m.start <= LEN[1] * 1.6 && m.start >= first - 5 && m.end <= last + 30 && m.title);
+    return { moments };
   }
 
   async download(id) {

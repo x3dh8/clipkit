@@ -8,5 +8,6 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Watcher"] }],
   "rules": [{ "type": "Text", "globs": ["**/*.html"], "fallthrough": true }],
+  "ai": { "binding": "AI" },
   "observability": { "enabled": true }
 }

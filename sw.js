@@ -1,6 +1,6 @@
 // ClipKit service worker: keeps the app itself available offline.
 // The speech model and fonts are cached by the browser separately.
-const CACHE = 'clipkit-v4';
+const CACHE = 'clipkit-v5';
 const SHELL = ['./', 'index.html', 'manifest.json', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
