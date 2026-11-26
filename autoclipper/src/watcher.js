@@ -174,7 +174,7 @@ export class Watcher {
     const given = req.headers.get('x-clipkit-key') || '';
     if (path === '/api/ai/transcribe' && method === 'POST') {
       if (!this.key || given !== this.key) return json({ error: 'Wrong or missing access key.' }, 401);
-      try { return json(await this.aiTranscribe(await req.arrayBuffer(), url.searchParams.get('lang'))); }
+      try { return json(await this.aiTranscribe(await req.arrayBuffer(), url.searchParams.get('lang'), url.searchParams.get('engine'), req.headers.get('content-type'))); }
       catch (e) { return json({ error: e.message || String(e) }, 500); }
     }
     const body = method === 'POST' ? await req.json().catch(() => ({})) : {};
@@ -784,9 +784,13 @@ export class Watcher {
 
   /* ---------------- AI for ClipKit's Moments tab ---------------- */
   ai() { if (!this.env || !this.env.AI) throw new Error('Cloudflare AI is not turned on for this worker yet. Redeploy it from GitHub.'); return this.env.AI; }
-  async aiTranscribe(buf, lang) {
+  async aiTranscribe(buf, lang, engine, ctype) {
     if (!buf || buf.byteLength < 100) throw new Error('No audio was sent.');
     if (buf.byteLength > 25 * 1024 * 1024) throw new Error('Audio piece too big.');
+    if (engine !== 'whisper') {
+      // Deepgram Nova-3: best with game noise and casual talk. Falls back to Whisper if it fails.
+      try { return await this.novaTranscribe(buf, lang, ctype); } catch (e) { this.lastNovaErr = String(e && e.message || e).slice(0, 300); if (engine === 'nova') throw e; }
+    }
     const bytes = new Uint8Array(buf); let bin = '';
     for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
     const opts = { audio: btoa(bin), vad_filter: true, condition_on_previous_text: false, initial_prompt: "Umm, like, I'm gonna keep it real, bro. Nah, he's wildin'." };
@@ -794,7 +798,24 @@ export class Watcher {
     const r = await this.ai().run('@cf/openai/whisper-large-v3-turbo', opts);
     const segs = (r.segments || []).map((s) => ({ start: +s.start || 0, end: +s.end || 0, text: String(s.text || '').trim(),
       words: Array.isArray(s.words) ? s.words.map((w) => ({ w: String(w.word || '').trim(), s: +w.start || 0, e: +w.end || 0 })).filter((w) => w.w) : null })).filter((s) => s.text);
-    return { segments: segs, text: r.text || '' };
+    return { segments: segs, text: r.text || '', engine: 'whisper' };
+  }
+  async novaTranscribe(buf, lang, ctype) {
+    const opts = { audio: { body: new Response(buf).body, contentType: ctype || 'audio/wav' }, smart_format: true, punctuate: true, numerals: true };
+    opts.language = lang && /^[a-z]{2}$/.test(lang) ? lang : 'en';
+    const r = await this.ai().run('@cf/deepgram/nova-3', opts);
+    const alt = r && r.results && r.results.channels && r.results.channels[0] && r.results.channels[0].alternatives && r.results.channels[0].alternatives[0];
+    if (!alt || !Array.isArray(alt.words)) throw new Error('Nova gave no words: ' + JSON.stringify(r).slice(0, 200));
+    const words = alt.words.map((w) => ({ w: String(w.punctuated_word || w.word || '').trim(), s: +w.start || 0, e: +w.end || 0 })).filter((w) => w.w);
+    // sentence-sized segments (Moments uses these)
+    const segs = []; let cur = null;
+    for (const w of words) {
+      if (!cur || w.s - cur.end > 1.2 || cur.words.length >= 40) { cur = { start: w.s, end: w.e, words: [] }; segs.push(cur); }
+      cur.words.push(w); cur.end = w.e;
+      if (/[.!?]$/.test(w.w) && cur.words.length >= 4) cur = null;
+    }
+    for (const sg of segs) sg.text = sg.words.map((w) => w.w).join(' ');
+    return { segments: segs, text: alt.transcript || '', engine: 'nova' };
   }
   async aiMoments(b) {
     const lines = Array.isArray(b.lines) ? b.lines.slice(0, 900) : [];
