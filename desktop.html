@@ -157,6 +157,7 @@ body.mmbusy .tabs,body.mmbusy #mmSettings,body.mmbusy #mmPick{pointer-events:non
   <div class="logo">Clip<b>Kit</b></div>
   <div class="tabs" id="tabs"><button data-v="clip" class="on">Clip</button><button data-v="montage">Montage</button><button data-v="batch">Batch</button><button data-v="moments">Moments</button></div>
   <div id="fname"></div>
+  <button class="btn" id="newProj" hidden>New project</button>
   <button class="btn" id="openBtn">Open clip</button>
   <input type="file" id="fileIn" accept="video/*,.mkv,.mov" hidden>
 </header>
@@ -725,6 +726,7 @@ function loadFile(f) {
   if (video.src && !M.items.some((it) => it.url === video.src)) URL.revokeObjectURL(video.src);
   setView('clip');
   S.file = f; pcm = null; S.words = []; S.groups = []; S.boxes = {};
+  clearProjectText();
   renderCapList(); $('#dl').hidden = true; resetHL();
   $('#fname').textContent = f.name;
   video.src = URL.createObjectURL(f);
@@ -733,11 +735,31 @@ video.addEventListener('loadedmetadata', () => {
   S.vw = video.videoWidth || 16; S.vh = video.videoHeight || 9; S.dur = video.duration;
   S.inT = 0; S.outT = S.dur;
   $('#scrub').max = S.dur;
-  $('#empty').hidden = true; $('#app').hidden = false;
+  $('#empty').hidden = true; $('#app').hidden = false; $('#newProj').hidden = false;
   setLayout(S.layout);
   sizeStage(); updateTrim(); updateTransport();
 });
 video.addEventListener('error', () => { if (S.file) toast("Chrome can't play this file. Try an MP4 (H.264) version."); });
+// New project: clear the clip and its edits, keep your styles
+function clearProjectText() {
+  S.hook.text = ''; $('#hookText').value = ''; hookRect = null;
+  S.tw.mode = 'none'; S.cap.on = true; S.cap.yTouched = false;
+  if (typeof syncTw === 'function') syncTw();
+  syncCapUI();
+  const cs = $('#capStatus'); if (cs) cs.hidden = true;
+}
+function newProject() {
+  if (S.exporting) return;
+  if (S.file && !confirm('Start a new project? This clears the current clip, captions, title and trim. Your styles stay.')) return;
+  video.pause();
+  if (video.src && !M.items.some((it) => it.url === video.src)) URL.revokeObjectURL(video.src);
+  video.removeAttribute('src'); video.load();
+  S.file = null; pcm = null; S.words = []; S.groups = []; S.boxes = {}; S.inT = 0; S.outT = 0; S.dur = 0;
+  clearProjectText(); renderCapList(); resetHL(); $('#dl').hidden = true;
+  $('#fname').textContent = '';
+  setView('clip'); window.scrollTo(0, 0);
+}
+$('#newProj').onclick = newProject;
 $('#openBtn').onclick = $('#pickBtn').onclick = () => $('#fileIn').click();
 $('#fileIn').onchange = (e) => { loadFile(e.target.files[0]); e.target.value = ''; };
 const drop = $('#drop');
@@ -1201,6 +1223,7 @@ function setView(v) {
   $('#mmview').hidden = v !== 'moments';
   $('#empty').hidden = v !== 'clip' || !!S.file;
   $('#app').hidden = v !== 'clip' || !S.file;
+  $('#newProj').hidden = v !== 'clip' || !S.file;
   if (v === 'montage') { video.pause(); refreshMontage(); } else if (v === 'batch') { video.pause(); renderBList(); } else if (v === 'moments') { video.pause(); mmRender(); } else { sizeStage(); drawStrip(); }
 }
 $('#tabs').onclick = (e) => { const b = e.target.closest('button'); if (b && !M.running && !S.exporting && !B.running && !MM.running) setView(b.dataset.v); };

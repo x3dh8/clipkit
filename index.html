@@ -154,6 +154,7 @@ body.mmbusy .tabs,body.mmbusy #mmSettings,body.mmbusy #mmPick{pointer-events:non
 .tabs button{flex:none}
 #toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#2b2f37;border:1px solid var(--line);padding:10px 16px;border-radius:12px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s;width:max-content;max-width:90vw;z-index:20}
 #toast.show{opacity:1}
+.projbar{display:flex;align-items:center;gap:10px;margin:10px 0 4px}.projbar span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--mute);font-size:14px}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -177,6 +178,7 @@ body.mmbusy .tabs,body.mmbusy #mmSettings,body.mmbusy #mmPick{pointer-events:non
 </div>
 
 <main id="app" hidden class="wrapc">
+  <div class="projbar"><span id="projName"></span><button class="btn" id="newProj">New project</button></div>
   <div class="prev"><canvas id="out" aria-label="Vertical preview. Tap to play."></canvas></div>
   <div class="transport">
     <button class="btn icon" id="playBtn" aria-label="Play"><svg width="16" height="16" viewBox="0 0 14 14"><path id="playIcon" d="M3 1.5v11l9-5.5z" fill="currentColor"/></svg></button>
@@ -732,6 +734,8 @@ function loadFile(f) {
   if (video.src && !M.items.some((it) => it.url === video.src)) URL.revokeObjectURL(video.src);
   setView('clip');
   S.file = f; pcm = null; S.words = []; S.groups = []; S.boxes = {};
+  clearProjectText();
+  $('#projName').textContent = f.name;
   renderCapList(); $('#dl').hidden = true; resetHL();
   $('#fname').textContent = f.name;
   video.src = URL.createObjectURL(f);
@@ -745,6 +749,26 @@ video.addEventListener('loadedmetadata', () => {
   sizeStage(); updateTrim(); updateTransport();
 });
 video.addEventListener('error', () => { if (S.file) toast("Chrome can't play this file. Try an MP4 (H.264) version."); });
+// New project: clear the clip and its edits, keep your styles
+function clearProjectText() {
+  S.hook.text = ''; $('#hookText').value = ''; hookRect = null;
+  S.tw.mode = 'none'; S.cap.on = true; S.cap.yTouched = false;
+  if (typeof syncTw === 'function') syncTw();
+  syncCapUI();
+  const cs = $('#capStatus'); if (cs) cs.hidden = true;
+}
+function newProject() {
+  if (S.exporting) return;
+  if (S.file && !confirm('Start a new project? This clears the current clip, captions, title and trim. Your styles stay.')) return;
+  video.pause();
+  if (video.src && !M.items.some((it) => it.url === video.src)) URL.revokeObjectURL(video.src);
+  video.removeAttribute('src'); video.load();
+  S.file = null; pcm = null; S.words = []; S.groups = []; S.boxes = {}; S.inT = 0; S.outT = 0; S.dur = 0;
+  clearProjectText(); renderCapList(); resetHL(); $('#dl').hidden = true;
+  $('#fname').textContent = ''; $('#projName').textContent = '';
+  setView('clip'); window.scrollTo(0, 0);
+}
+$('#newProj').onclick = newProject;
 $('#openBtn').onclick = $('#pickBtn').onclick = () => $('#fileIn').click();
 $('#fileIn').onchange = (e) => { loadFile(e.target.files[0]); e.target.value = ''; };
 const drop = $('#drop');
