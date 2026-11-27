@@ -192,6 +192,7 @@ export class Watcher {
       if (given !== this.key) return json({ error: 'Wrong or missing access key.' }, 401);
 
       if (path === '/api/state') return json(this.state());
+      if (path === '/api/debug/vod') { const ids = this.clips.slice(0, 3).map((c) => c.id); const j = await this.helix('/clips', { query: { id: ids } }); return json({ ids, data: (j.data || []).map((c) => ({ id: c.id, video_id: c.video_id, vod_offset: c.vod_offset, created_at: c.created_at })) }); }
       if (path === '/api/auth/start' && method === 'POST') return json(await this.authStart());
       if (path === '/api/auth/poll' && method === 'POST') return json(await this.authPoll());
       if (path === '/api/logout' && method === 'POST') { await this.closeWs(); this.auth = null; await this.st.delete('auth'); return json({ ok: true }); }
