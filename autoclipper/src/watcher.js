@@ -192,7 +192,6 @@ export class Watcher {
       if (given !== this.key) return json({ error: 'Wrong or missing access key.' }, 401);
 
       if (path === '/api/state') return json(this.state());
-      if (path === '/api/debug/vod') { const ids = this.clips.slice(0, 20).map((c) => c.id); const j = await this.helix('/clips', { query: { id: ids } }); return json({ ids, data: (j.data || []).map((c) => ({ id: c.id, video_id: c.video_id, vod_offset: c.vod_offset, created_at: c.created_at })) }); }
       if (path === '/api/auth/start' && method === 'POST') return json(await this.authStart());
       if (path === '/api/auth/poll' && method === 'POST') return json(await this.authPoll());
       if (path === '/api/logout' && method === 'POST') { await this.closeWs(); this.auth = null; await this.st.delete('auth'); return json({ ok: true }); }
@@ -657,7 +656,19 @@ export class Watcher {
     const found = new Map((j.data || []).map((c) => [c.id, c]));
     let changed = false;
     const takeVod = (c, f) => { if (f.video_id && f.vod_offset != null && (exact.has(f.id) || !c.video)) { c.video = f.video_id; c.vodOffset = f.vod_offset; c.vodEst = !exact.has(f.id); } };
-    for (const c of fix) { c.vodTry = now; const f = found.get(c.id); if (f) takeVod(c, f); changed = true; }
+    // clips made through the API usually come back with no VOD link, so find the stream's VOD ourselves
+    const archiveGuess = async (c) => {
+      if (c.video || !c.streamKey) return;
+      this.archives = this.archives || new Map();
+      let list = this.archives.get(c.broadcaster_id);
+      if (!list || now - list.at > 10 * 60 * 1000) {
+        try { list = { at: now, v: (await this.helix('/videos', { query: { user_id: c.broadcaster_id, type: 'archive', first: '10' } })).data || [] }; } catch (e) { list = { at: now, v: [] }; }
+        this.archives.set(c.broadcaster_id, list);
+      }
+      const v = list.v.find((x) => Math.abs(Date.parse(x.created_at) - Date.parse(c.streamKey)) < 15 * 60 * 1000);
+      if (v) { c.video = v.id; c.vodOffset = Math.max(0, (c.at - Date.parse(v.created_at)) / 1000 - (c.duration || this.cfg.clipLen)); c.vodEst = true; }
+    };
+    for (const c of fix) { c.vodTry = now; const f = found.get(c.id); if (f) takeVod(c, f); await archiveGuess(c); changed = true; }
     for (const c of pending) {
       const f = found.get(c.id);
       if (f) {
