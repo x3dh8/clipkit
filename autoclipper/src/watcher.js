@@ -29,7 +29,7 @@ const BOTS = new Set(['nightbot', 'streamelements', 'moobot', 'fossabot', 'strea
 // How long to ignore chat after events that make chat explode for reasons other than gameplay
 const QUIET = { raid: 90, unraid: 30, sub_gift: 20, community_sub_gift: 45, gift_paid_upgrade: 15, prime_paid_upgrade: 10, pay_it_forward: 15, sub: 8, resub: 8, bits_badge_tier: 15, charity_donation: 20, announcement: 20, watch_streak: 5 };
 
-const defaultCfg = () => ({ clientId: '', enabled: true, streamers: [], sensitivity: 'normal', clipLen: 30, maxPerStream: 5, cooldown: 120, discord: '', alerts: true, digestOn: false, digestHour: 8, tz: 'America/Denver', ytKey: '', postsHook: '', queueOn: false, queueHour: 13, queueCount: 8 });
+const defaultCfg = () => ({ clientId: '', enabled: true, streamers: [], sensitivity: 'normal', clipLen: 30, maxPerStream: 5, cooldown: 120, discord: '', alerts: true, digestOn: false, digestHour: 8, tz: 'America/Denver', ytKey: '', postsHook: '', queueOn: false, queueHour: 13, queueCount: 8, reactDelay: 8, ytChannel: '' });
 // YouTube rules the daily queue checks against (games/labels from Twitch)
 const SKIP_GAMES = { 'slots': 'gambling', 'virtual casino': 'gambling', 'casino': 'gambling', 'music': 'copyrighted music', 'djs': 'copyrighted music' };
 const SKIP_LABELS = { Gambling: 'gambling', SexualThemes: 'sexual themes' };
@@ -154,6 +154,7 @@ export class Watcher {
     this.ytUsage = (await this.st.get('ytUsage')) || { day: '', units: 0 };
     this.lastQueue = (await this.st.get('lastQueue')) || '';
     this.queue = (await this.st.get('queue')) || null;
+    this.results = (await this.st.get('results')) || null;
   }
 
   now() { return Date.now(); }
@@ -196,6 +197,17 @@ export class Watcher {
       if (path === '/api/auth/poll' && method === 'POST') return json(await this.authPoll());
       if (path === '/api/logout' && method === 'POST') { await this.closeWs(); this.auth = null; await this.st.delete('auth'); return json({ ok: true }); }
       if (path === '/api/streamers/add' && method === 'POST') return json(await this.addStreamer(body.login));
+      if (path === '/api/streamers/campaign' && method === 'POST') {
+        const s = this.cfg.streamers.find((x) => x.id === body.id);
+        if (!s) return json({ error: 'Unknown streamer' }, 400);
+        const c = body.campaign;
+        if (!c || !String(c.name || '').trim()) { delete s.campaign; await this.st.put('cfg', this.cfg); this.addLog(`${s.name} is no longer a campaign streamer.`); return json({ ok: true }); }
+        const tags = String(c.tags || '').split(/[\s,]+/).map((t) => t.replace(/^#*/, '').replace(/[^\p{L}\p{N}_]/gu, '')).filter(Boolean).slice(0, 10).map((t) => '#' + t);
+        s.campaign = { name: String(c.name).trim().slice(0, 60), credit: String(c.credit || '').trim().slice(0, 200), tags, rules: String(c.rules || '').trim().slice(0, 400) };
+        await this.st.put('cfg', this.cfg); this.addLog(`${s.name} added to campaign "${s.campaign.name}".`);
+        return json({ ok: true });
+      }
+      if (path === '/api/results' && method === 'POST') return json(await this.learnResults(true));
       if (path === '/api/streamers/style' && method === 'POST') {
         const s = this.cfg.streamers.find((x) => x.id === body.id);
         if (!s || !['hype', 'talk'].includes(body.style)) return json({ error: 'Unknown streamer or style' }, 400);
@@ -228,6 +240,8 @@ export class Watcher {
         if (typeof body.queueOn === 'boolean') c.queueOn = body.queueOn;
         if (Number.isInteger(+body.queueHour) && body.queueHour !== undefined && body.queueHour !== null && +body.queueHour >= 0 && +body.queueHour <= 23) c.queueHour = +body.queueHour;
         if ([3, 5, 8].includes(+body.queueCount)) c.queueCount = +body.queueCount;
+        if ([0, 4, 8, 12].includes(+body.reactDelay) && body.reactDelay !== undefined && body.reactDelay !== null) c.reactDelay = +body.reactDelay;
+        if (typeof body.ytChannel === 'string') { const v = body.ytChannel.trim().replace(/^https?:\/\/(www\.)?youtube\.com\//, '').replace(/\/.*$/, ''); if (!v || /^(@[\w.-]{3,30}|UC[\w-]{22})$/.test(v)) { if (c.ytChannel !== v) this.results = null; c.ytChannel = v; } else return json({ error: 'Use your channel handle like @yourname' }, 400); }
         if (typeof body.digestOn === 'boolean') c.digestOn = body.digestOn;
         if (Number.isInteger(+body.digestHour) && +body.digestHour >= 0 && +body.digestHour <= 23 && body.digestHour !== undefined) c.digestHour = +body.digestHour;
         if (typeof body.tz === 'string' && body.tz) { try { new Intl.DateTimeFormat('en', { timeZone: body.tz }); c.tz = body.tz; } catch (e) {} }
@@ -310,7 +324,7 @@ export class Watcher {
       connected: !!(this.auth && !this.auth.broken), login: this.auth && this.auth.login, broken: !!(this.auth && this.auth.broken),
       cfg: { enabled: this.cfg.enabled, sensitivity: this.cfg.sensitivity, clipLen: this.cfg.clipLen, maxPerStream: this.cfg.maxPerStream, cooldown: this.cfg.cooldown,
         discord: this.cfg.discord ? '…' + this.cfg.discord.slice(-6) : '', yt: !!this.cfg.ytKey,
-        postsHook: this.cfg.postsHook ? '…' + this.cfg.postsHook.slice(-6) : '', queueOn: this.cfg.queueOn, queueHour: this.cfg.queueHour, queueCount: this.cfg.queueCount, queueAt: this.queue && this.queue.at, alerts: this.cfg.alerts, digestOn: this.cfg.digestOn, digestHour: this.cfg.digestHour, tz: this.cfg.tz },
+        postsHook: this.cfg.postsHook ? '…' + this.cfg.postsHook.slice(-6) : '', queueOn: this.cfg.queueOn, queueHour: this.cfg.queueHour, queueCount: this.cfg.queueCount, queueAt: this.queue && this.queue.at, reactDelay: this.cfg.reactDelay, ytChannel: this.cfg.ytChannel, alerts: this.cfg.alerts, digestOn: this.cfg.digestOn, digestHour: this.cfg.digestHour, tz: this.cfg.tz },
       chat: !!(this.ws && this.session),
       streamers: this.cfg.streamers.map((s) => {
         const L = this.live[s.id], st = this.stats.get(s.id);
@@ -320,6 +334,7 @@ export class Watcher {
           clips: L ? this.clips.filter((c) => c.broadcaster_id === s.id && c.streamKey === L.since).length : 0 };
       }),
       clips: this.clips.slice(0, 80),
+      results: this.results || null,
       log: this.log.slice(0, 40)
     };
   }
@@ -577,7 +592,9 @@ export class Watcher {
       const asked = ask10 >= 3 && u5 >= S.min5 / 2;
       if (!((fast && (hypeShare >= 0.25 || u5 >= base * S.mult * 1.6)) || asked)) continue;
       const why = asked && !fast ? `${ask10} people asked for a clip` : `${u5} people reacting at once (${(u5 / base).toFixed(1)}× normal)`;
-      this.tryClip(id, why, st.top(nowS - 1, 10));
+      // wait a few seconds so the reaction is in the clip too, and make it that much longer
+      const d = Math.max(0, Math.min(15, +this.cfg.reactDelay || 0));
+      this.tryClip(id, why, st.top(nowS - 1, 10), d ? Math.min(60, this.cfg.clipLen + d) : 0, d * 1000);
     }
   }
   styleOf(id) { const s = this.cfg.streamers.find((x) => x.id === id); return (s && s.style) || 'hype'; }
@@ -587,12 +604,14 @@ export class Watcher {
     if (this.now() - st.lastClip < this.cfg.cooldown * 1000) return false;
     return this.clips.filter((c) => c.broadcaster_id === id && c.streamKey === L.since).length < this.cfg.maxPerStream;
   }
-  tryClip(id, why, top, duration) {
+  tryClip(id, why, top, duration, delayMs) {
     if (!this.canClip(id)) return;
     this.statsFor(id).lastClip = this.now();
     const s = this.cfg.streamers.find((x) => x.id === id);
-    if (s && s.style === 'talk') duration = 60;
-    if (s) this.createClip(s, why, top, false, duration).catch((e) => this.addLog(`Clip failed for ${s.name}: ${e.message}`));
+    if (s && s.style === 'talk') { duration = 60; delayMs = 0; }
+    if (!s) return;
+    const go = () => this.createClip(s, why, top, false, duration).catch((e) => this.addLog(`Clip failed for ${s.name}: ${e.message}`));
+    if (delayMs > 0) setTimeout(() => { if (this.live[id] && this.cfg.enabled) go(); }, delayMs); else go();
   }
   // When several different viewers clip within the last minute, something good just happened
   async checkViewerClips(ids) {
@@ -602,7 +621,11 @@ export class Watcher {
       let j; try { j = await this.helix('/clips', { query: { broadcaster_id: id, started_at: since, first: '20' } }); } catch (e) { return; }
       const fresh = (j.data || []).filter((c) => c.creator_id !== this.auth.userId && this.now() - Date.parse(c.created_at) < 75 * 1000);
       const people = new Set(fresh.map((c) => c.creator_id));
-      if (people.size >= 2) this.tryClip(id, `${people.size} viewers clipped this moment`, [], 60);
+      if (people.size < 2) return;
+      // already clipped this moment ourselves? then don't make a second one
+      const t = fresh.map((c) => Date.parse(c.created_at)).sort((a, b) => a - b)[Math.floor(fresh.length / 2)];
+      if (this.clips.some((c) => c.broadcaster_id === id && Math.abs(c.at - t) < 100 * 1000)) return;
+      this.tryClip(id, `${people.size} viewers clipped this moment`, [], 60);
     }));
   }
 
@@ -749,6 +772,8 @@ export class Watcher {
     if (c.streamAt != null) lines.push(`⏱️ **${this.streamTime(c.streamAt)}** into the stream`);
     if (c.top && c.top.length) lines.push('💬 Chat: ' + c.top.join(', '));
     if (c.game) lines.push('🎮 ' + c.game);
+    const camp = (this.cfg.streamers.find((x) => x.id === c.broadcaster_id) || {}).campaign;
+    if (camp) lines.push(`💰 Campaign: **${camp.name}**`);
     const vl = this.vodLink(c.video, c.vodOffset);
     if (vl) lines.push(`[✂️ Clip it yourself from the VOD](${vl})`);
     lines.push(c.status === 'ready' ? `[▶️ Watch the clip](${c.url})` : c.status === 'failed' ? '⚠️ Twitch couldn\'t make this clip. Use the VOD link instead.' : '⏳ Twitch is still making the clip…');
@@ -1043,6 +1068,44 @@ export class Watcher {
     if (ch.is_branded_content) w.push('a sponsor, so cut any sponsor logos, links or codes');
     return w;
   }
+  /* ---------------- Learn from your YouTube results ---------------- */
+  // Reads your channel's recent Shorts once a day, works out which streamers do well for you,
+  // and gives the daily queue a gentle push toward them (x0.75 to x1.35).
+  async learnResults(force) {
+    if (!this.cfg.ytKey || !this.cfg.ytChannel) return { needSetup: true };
+    if (!force && this.results && this.now() - this.results.at < 20 * 3600 * 1000) return this.results;
+    const h = this.cfg.ytChannel;
+    const ch = await this.yt('channels', h.startsWith('@') ? { part: 'contentDetails,snippet', forHandle: h } : { part: 'contentDetails,snippet', id: h }, 1);
+    const c = (ch.items || [])[0];
+    if (!c) throw new Error("Couldn't find that YouTube channel. Check the handle.");
+    const pl = await this.yt('playlistItems', { part: 'contentDetails', playlistId: c.contentDetails.relatedPlaylists.uploads, maxResults: '50' }, 1);
+    const ids = (pl.items || []).map((x) => x.contentDetails.videoId).filter(Boolean);
+    const vids = ids.length ? (await this.yt('videos', { part: 'snippet,statistics', id: ids.join(',') }, 1)).items || [] : [];
+    const old = vids.filter((v) => this.now() - Date.parse(v.snippet.publishedAt) > 24 * 3600 * 1000); // give each video a day before judging it
+    const match = (v) => {
+      const t = (v.snippet.title + ' ' + v.snippet.description).toLowerCase();
+      return this.cfg.streamers.find((st) => (st.login && t.includes('twitch.tv/' + st.login.toLowerCase())) || t.includes(String(st.name || '').toLowerCase()) || (st.login && t.includes(st.login.toLowerCase())));
+    };
+    const med = (a) => { const b = [...a].sort((x, y) => x - y); return b.length ? b[Math.floor(b.length / 2)] : 0; };
+    const views = (v) => +((v.statistics || {}).viewCount || 0);
+    const all = med(old.map(views)) || 1, per = {};
+    const owner = new Map();
+    for (const v of old) { const st = match(v); owner.set(v.id, st ? st.id : null); if (!st) continue; (per[st.id] = per[st.id] || { name: st.name, views: [], best: null }).views.push(views(v)); if (!per[st.id].best || views(v) > views(per[st.id].best)) per[st.id].best = v; }
+    const streamers = {};
+    for (const [id, p] of Object.entries(per)) {
+      const m = med(p.views), n = p.views.length;
+      // compare against your other videos (not counting this streamer's own)
+      const others = old.filter((v) => owner.get(v.id) !== id).map(views), base = others.length >= 2 ? med(others) || 1 : all;
+      // only trust it after 2+ videos, and lean on it more as you post more
+      const raw = Math.sqrt(Math.max(m, 1) / base), w = Math.min(1, (n - 1) / 4);
+      streamers[id] = { name: p.name, videos: n, median: m, factor: n >= 2 ? Math.round(Math.max(0.75, Math.min(1.35, 1 + (raw - 1) * w)) * 100) / 100 : 1,
+        best: p.best ? { title: p.best.snippet.title, views: views(p.best), url: `https://youtube.com/shorts/${p.best.id}` } : null };
+    }
+    const top = [...vids].sort((a, b) => views(b) - views(a)).slice(0, 3).map((v) => ({ title: v.snippet.title, views: views(v), url: `https://youtube.com/shorts/${v.id}` }));
+    this.results = { at: this.now(), channel: c.snippet.title, videos: vids.length, judged: old.length, median: old.length ? all : 0, streamers, top };
+    await this.st.put('results', this.results);
+    return this.results;
+  }
   async makeQueue(preview) {
     const n = this.cfg.queueCount || 8, since = this.now() - 26 * 3600 * 1000, items = [], skipped = [];
     const editor = new Set(this.cfg.streamers.filter((s) => s.editor === true).map((s) => s.id));
@@ -1078,7 +1141,16 @@ export class Watcher {
     skipped.push(...[...bad].filter((id) => checked.get(id) === false).map(() => 'the clip title breaks YouTube rules'));
     const skipNote = skipped.length ? `Skipped ${skipped.length} clip${skipped.length > 1 ? 's' : ''} for YouTube rules (${[...new Set(skipped)].join(', ')}).` : '';
     if (skipNote) this.addLog('Queue ' + skipNote.charAt(0).toLowerCase() + skipNote.slice(1));
-    // best first, no more than 3 from one streamer
+    // campaign streamers first (they pay), then what has worked on your channel
+    const byId = new Map(this.cfg.streamers.map((x) => [x.id, x]));
+    if (!preview) await this.learnResults(false).catch(() => {});
+    for (const it of kept) {
+      const st = byId.get(it.bid) || {};
+      it.campaign = st.campaign || null;
+      if (it.campaign) it.score += 20;
+      const r = this.results && this.results.streamers && this.results.streamers[it.bid];
+      if (r && r.factor) { it.score = Math.round(it.score * r.factor); it.resultsNote = r.factor > 1.05 ? 'does well on your channel' : r.factor < 0.95 ? 'usually gets fewer views for you' : ''; }
+    }
     const per = {}, chosen = [];
     for (const it of kept.sort((a, b) => b.score - a.score)) { if ((per[it.name] = (per[it.name] || 0) + 1) > 3) continue; it.warn = this.warnings(meta, it.bid); chosen.push(it); if (chosen.length >= n) break; }
     if (!chosen.length) {
@@ -1098,16 +1170,17 @@ export class Watcher {
       const w = copy && copy.find((x) => +x.n === i + 1);
       const titles = w && Array.isArray(w.titles) ? w.titles.map((t) => clean(t).slice(0, 100)).filter((t) => t.length >= 8) : [];
       it.titles = titles.length ? [...new Set(titles)].slice(0, 3) : [clean(it.title).slice(0, 100) || `${it.name} stream moment`];
-      it.description = (w && w.description ? clean(w.description).slice(0, 400) : `${it.name} on stream.`) + `\nClip from ${it.name}'s stream${it.login ? `: twitch.tv/${it.login}` : ''}. All credit to ${it.name}.`;
+      it.description = (w && w.description ? clean(w.description).slice(0, 400) : `${it.name} on stream.`) + '\n' + (it.campaign && it.campaign.credit ? it.campaign.credit : `Clip from ${it.name}'s stream${it.login ? `: twitch.tv/${it.login}` : ''}. All credit to ${it.name}.`);
       const tags = (w && Array.isArray(w.hashtags) ? w.hashtags : []).map((t) => '#' + String(t).replace(/[^\p{L}\p{N}_]/gu, '')).filter((t) => t.length > 2 && !BAD_WORDS.test(t) && !/^#(fyp|foryou|foryoupage|viral|trending|explore|xyzbca|blowup)$/i.test(t));
-      const seen = new Set(); it.hashtags = ['#shorts', ...tags, ...(it.login ? ['#' + it.login] : [])].filter((t) => !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase())).slice(0, 5);
+      const seen = new Set(), need = it.campaign ? it.campaign.tags : [];
+      it.hashtags = ['#shorts', ...need, ...tags, ...(it.login ? ['#' + it.login] : [])].filter((t) => !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase())).slice(0, Math.max(5, need.length + 1));
       it.angle = w && w.angle ? clean(w.angle).slice(0, 200) : '';
       it.postAt = times[i];
     });
     // last check on what the AI wrote; anything flagged goes back to a plain title
     const vs = await Promise.all(chosen.map((it) => this.guard(`${it.titles.join('\n')}\n${it.description}\n${it.hashtags.join(' ')}\n${it.angle}`)));
-    chosen.forEach((it, i) => { if (vs[i] === false) { it.titles = [`${it.name} stream moment`]; it.description = `Clip from ${it.name}'s stream${it.login ? `: twitch.tv/${it.login}` : ''}. All credit to ${it.name}.`; it.hashtags = ['#shorts', ...(it.login ? ['#' + it.login] : [])]; it.angle = ''; } });
-    if (preview) return { ok: true, frameErr: this.frameErr || '', thumbs: chosen.map((it) => it.thumb), preview: chosen.map((it) => ({ name: it.name, game: it.game, streamTitle: it.streamTitle, scene: it.scene, titles: it.titles, hashtags: it.hashtags, angle: it.angle })) };
+    chosen.forEach((it, i) => { if (vs[i] === false) { it.titles = [`${it.name} stream moment`]; it.description = `Clip from ${it.name}'s stream${it.login ? `: twitch.tv/${it.login}` : ''}. All credit to ${it.name}.`; it.hashtags = ['#shorts', ...(it.campaign ? it.campaign.tags : []), ...(it.login ? ['#' + it.login] : [])]; if (it.campaign && it.campaign.credit) it.description = it.campaign.credit; it.angle = ''; } });
+    if (preview) return { ok: true, frameErr: this.frameErr || '', thumbs: chosen.map((it) => it.thumb), preview: chosen.map((it) => ({ name: it.name, campaign: it.campaign && it.campaign.name, description: it.description, game: it.game, streamTitle: it.streamTitle, scene: it.scene, titles: it.titles, hashtags: it.hashtags, angle: it.angle })) };
     this.queue = { at: this.now(), items: chosen }; await this.st.put('queue', this.queue);
     const how = (it) => it.ready ? '📥 **Ready:** pull it into ClipKit Batch with *Get clips from my auto clipper*.'
       : it.kind === 'mine' ? '📥 Download it from your Clips Manager (Clips I\'ve created), then add it in ClipKit Batch.' + (it.vod ? ` Or [clip it yourself from the VOD](${it.vod}).` : '')
@@ -1119,7 +1192,9 @@ export class Watcher {
         it.titles.length > 1 ? `**Other titles:**\n${it.titles.slice(1).map((t) => '• ' + t).join('\n')}` : '',
         `**Description:**\n${it.description}\n${it.hashtags.join(' ')}`,
         it.angle ? `🎙️ **Add your take:** ${it.angle}` : '',
-        it.warn && it.warn.length ? `⚠️ **Heads up:** this channel is marked for ${it.warn.join('; ')}.` : '', how(it)].filter(Boolean).join('\n\n').slice(0, 1500),
+        it.warn && it.warn.length ? `⚠️ **Heads up:** this channel is marked for ${it.warn.join('; ')}.` : '',
+        it.campaign ? `💰 **Campaign: ${it.campaign.name}**${it.campaign.rules ? `\n${it.campaign.rules}` : ''}\nSubmit the link on Content Rewards after you post.` : '',
+        it.resultsNote ? `📈 ${it.name} ${it.resultsNote}.` : '', how(it)].filter(Boolean).join('\n\n').slice(0, 1500),
       thumbnail: it.thumb ? { url: it.thumb } : undefined
     }));
     const { day } = this.localNow();

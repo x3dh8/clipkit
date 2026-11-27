@@ -125,6 +125,7 @@ details ol{margin-top:6px}
 #toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#2b2f37;border:1px solid var(--line);padding:10px 16px;border-radius:12px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s;width:max-content;max-width:90vw;z-index:9}
 #toast.show{opacity:1}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
+.campform{margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:12px;display:grid;gap:8px}.campform label{display:grid;gap:4px;font-size:14px}.campform textarea{font:inherit;padding:8px;border-radius:8px;border:1px solid var(--line);background:transparent;color:inherit}.edtag.camp{background:#3a2f00;color:#ffd23f}ul.res{margin:6px 0 0;padding-left:18px;display:grid;gap:4px}
 </style>
 </head>
 <body>
@@ -242,6 +243,15 @@ details ol{margin-top:6px}
       <div class="err" id="addErr"></div>
       <p class="mute small" style="margin-top:8px"><b>EDITOR ✓</b> means the streamer made you an editor: those clips download automatically, ClipKit Batch can pull them in, and you can clip any moment from their VODs. <b>Hype</b> clips when chat explodes. <b>Talk</b> is for streamers whose best moments are deep or real talks: it watches for chat agreeing (“so real”, “facts”, 🙏) and makes 60-second clips so the moment has context. Talk still catches funny moments too.</p>
       <div id="stList" style="margin-top:8px"></div>
+      <div id="campForm" class="campform" hidden>
+        <h3 style="margin:0 0 6px">💰 Campaign for <span id="campWho"></span></h3>
+        <p class="mute small">Copy these from the campaign page on Content Rewards. The daily queue puts this streamer first and fills in the credit and hashtags for you.</p>
+        <label>Campaign name<input type="text" id="campName" maxlength="60" placeholder="e.g. Lacy Clipping Campaign"></label>
+        <label>Credit line they want in the description<input type="text" id="campCredit" maxlength="200" placeholder="e.g. Watch Lacy live: twitch.tv/lacy"></label>
+        <label>Required hashtags<input type="text" id="campTags" maxlength="200" placeholder="e.g. #lacy #lacyclips"></label>
+        <label>Rules to remember<textarea id="campRules" maxlength="400" rows="3" placeholder="e.g. No music. Must be 30–60 sec. Only clips from this month."></textarea></label>
+        <div class="row" style="gap:8px;margin-top:8px"><button class="btn primary" id="campSave">Save campaign</button><button class="btn" id="campRemove">Not a campaign</button><button class="btn" id="campClose">Close</button></div>
+      </div>
     </section>
 
     <section class="card">
@@ -260,6 +270,8 @@ details ol{margin-top:6px}
         <label>Max per stream<select id="maxPer"><option value="1">1</option><option value="3">3</option><option value="5">5</option><option value="10">10</option><option value="20">20</option></select></label>
       </div>
       <div class="grid2" style="grid-template-columns:1fr">
+        <label>Catch the reaction<select id="reactDelay"><option value="0">Clip right away</option><option value="4">Wait 4 sec</option><option value="8">Wait 8 sec (recommended)</option><option value="12">Wait 12 sec</option></select></label>
+        <p class="mute small" style="margin:-4px 0 4px">The funny part is often the reaction a few seconds after chat explodes. Waiting a bit (and making the clip that much longer) gets it in.</p>
         <label>Wait between clips of the same streamer<select id="cooldown"><option value="60">1 minute</option><option value="120">2 minutes</option><option value="300">5 minutes</option><option value="600">10 minutes</option></select></label>
       </div>
     </section>
@@ -307,6 +319,13 @@ details ol{margin-top:6px}
       </div>
       <button class="btn wide" id="pqNow">Make today's queue now</button>
       <p class="mute small" id="pqNote" style="margin-top:8px"></p>
+    </section>
+
+    <section class="card">
+      <h2>What's working on your channel</h2>
+      <p class="mute small">Once a day it reads your YouTube Shorts' views, works out which streamers do best for you, and nudges the daily queue toward them. Each video gets a day before it counts. Needs your YouTube key (YouTube tab).</p>
+      <div class="row"><input type="text" id="ytChIn" placeholder="Your channel, like @yourname" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn" id="ytChSave">Save</button><button class="btn" id="resNow">Check now</button></div>
+      <div id="resBox" class="mute small" style="margin-top:8px"></div>
     </section>
 
     <section class="card">
@@ -383,7 +402,7 @@ function render() {
     const pct = x.live && x.base ? Math.min(100, Math.round(x.rate / (x.base * 3) * 100)) : 0;
     const sub = x.live ? `${esc(x.game || 'Live')} · ${Number(x.viewers || 0).toLocaleString()} watching · ${x.clips} clip${x.clips === 1 ? '' : 's'} this stream` : 'Offline';
     const chat = x.live ? (x.base == null ? 'Learning normal chat speed…' : `${x.rate} people chatting now · normal ${x.base}` + (x.style === 'talk' ? ` · ${x.agree} agreeing` : '')) : '';
-    return `<div class="st"><img src="${esc(x.avatar)}" alt="" loading="lazy"><div><b>${esc(x.name)} <span class="badge${x.live ? '' : ' off'}">${x.live ? 'LIVE' : 'OFF'}</span>${x.editor === true ? ' <span class="edtag">EDITOR ✓</span>' : ''}</b><small>${sub}</small>${x.live ? `<small>${chat}</small><div class="meter"><i style="width:${pct}%"></i></div>` : ''}<div class="style" role="group" aria-label="Clip style for ${esc(x.name)}"><button data-style="hype" data-sid="${esc(x.id)}" class="${x.style !== 'talk' ? 'on' : ''}">Hype</button><button data-style="talk" data-sid="${esc(x.id)}" class="${x.style === 'talk' ? 'on' : ''}">Talk</button></div>${x.editor === true ? '' : `<div><button class="edcheck" data-edcheck="${esc(x.id)}">${x.editor === false ? 'Not an editor yet · check again' : 'Check editor access'}</button></div>`}</div><div class="acts">${x.live ? `<button class="btn mini" data-clip="${esc(x.id)}">Clip now</button>` : ''}<button class="btn mini" data-rm="${esc(x.id)}" aria-label="Remove ${esc(x.name)}">✕</button></div></div>`;
+    return `<div class="st"><img src="${esc(x.avatar)}" alt="" loading="lazy"><div><b>${esc(x.name)} <span class="badge${x.live ? '' : ' off'}">${x.live ? 'LIVE' : 'OFF'}</span>${x.editor === true ? ' <span class="edtag">EDITOR ✓</span>' : ''}${x.campaign ? ` <span class="edtag camp">💰 ${esc(x.campaign.name)}</span>` : ''}</b><small>${sub}</small>${x.live ? `<small>${chat}</small><div class="meter"><i style="width:${pct}%"></i></div>` : ''}<div class="style" role="group" aria-label="Clip style for ${esc(x.name)}"><button data-style="hype" data-sid="${esc(x.id)}" class="${x.style !== 'talk' ? 'on' : ''}">Hype</button><button data-style="talk" data-sid="${esc(x.id)}" class="${x.style === 'talk' ? 'on' : ''}">Talk</button></div>${x.editor === true ? '' : `<div><button class="edcheck" data-edcheck="${esc(x.id)}">${x.editor === false ? 'Not an editor yet · check again' : 'Check editor access'}</button></div>`}</div><div class="acts"><button class="btn mini" data-camp="${esc(x.id)}">${x.campaign ? 'Edit campaign' : '💰 Campaign'}</button>${x.live ? `<button class="btn mini" data-clip="${esc(x.id)}">Clip now</button>` : ''}<button class="btn mini" data-rm="${esc(x.id)}" aria-label="Remove ${esc(x.name)}">✕</button></div></div>`;
   }).join('') : '<div class="empty">No streamers yet. Add a few you like to clip.</div>');
   // clips already in Discord are hidden here so this list is just what's new (tick the box to see them)
   let showSent = false; try { showSent = localStorage.getItem('acShowSent') === '1'; } catch (e) {}
@@ -411,7 +430,8 @@ function render() {
   if (document.activeElement !== $('#pqHour')) $('#pqHour').value = String(s.cfg.queueHour);
   if (document.activeElement !== $('#pqCount')) $('#pqCount').value = String(s.cfg.queueCount);
   $('#pqNote').textContent = s.cfg.queueAt ? `Last queue: ${ago(s.cfg.queueAt)}.` : '';
-  $('#clipLen').value = s.cfg.clipLen; $('#maxPer').value = s.cfg.maxPerStream; $('#cooldown').value = s.cfg.cooldown;
+  $('#clipLen').value = s.cfg.clipLen; $('#maxPer').value = s.cfg.maxPerStream; $('#cooldown').value = s.cfg.cooldown; $('#reactDelay').value = String(s.cfg.reactDelay ?? 8);
+  renderResults(s);
   setHTML($('#log'), s.log.length ? s.log.map((l) => `<li><time>${clock(l.at)}</time><span>${esc(l.text)}</span></li>`).join('') : '<li><span class="mute">Nothing yet.</span></li>');
 }
 
@@ -450,7 +470,8 @@ async function addStreamer() {
 $('#addBtn').onclick = addStreamer;
 $('#addIn').addEventListener('keydown', (e) => { if (e.key === 'Enter') addStreamer(); });
 $('#stList').onclick = async (e) => {
-  const rm = e.target.closest('[data-rm]'), cl = e.target.closest('[data-clip]'), sty = e.target.closest('[data-style]'), ed = e.target.closest('[data-edcheck]');
+  const rm = e.target.closest('[data-rm]'), cl = e.target.closest('[data-clip]'), sty = e.target.closest('[data-style]'), ed = e.target.closest('[data-edcheck]'), cp = e.target.closest('[data-camp]');
+  if (cp) { openCamp(cp.dataset.camp); return; }
   try {
     if (ed) { ed.disabled = true; ed.textContent = 'Checking…'; const r = await api('/api/streamers/check-editor', { id: ed.dataset.edcheck }); toast(r.editor ? "You're an editor! Their clips download automatically now." : r.editor === false ? "Not an editor for this channel yet." : "Couldn't tell yet: this channel has no clips to test with."); refresh(); return; }
     if (sty) { await api('/api/streamers/style', { id: sty.dataset.sid, style: sty.dataset.style }); toast(sty.dataset.style === 'talk' ? 'Talk style: clips the deep moments when chat agrees (“so real”, 🙏), 60 seconds long.' : 'Hype style: clips when chat explodes.'); refresh(); return; }
@@ -458,6 +479,32 @@ $('#stList').onclick = async (e) => {
     if (cl) { cl.disabled = true; await api('/api/clip-now', { id: cl.dataset.clip }); toast('Clipping… it shows up below in a few seconds.'); refresh(); }
   } catch (err) { toast(err.message); if (cl) cl.disabled = false; }
 };
+let campId = null;
+function openCamp(id) {
+  const x = S.streamers.find((y) => y.id === id); if (!x) return;
+  campId = id; const c = x.campaign || {};
+  $('#campWho').textContent = x.name; $('#campName').value = c.name || ''; $('#campCredit').value = c.credit || ''; $('#campTags').value = (c.tags || []).join(' '); $('#campRules').value = c.rules || '';
+  $('#campRemove').hidden = !x.campaign; $('#campForm').hidden = false; $('#campName').focus();
+}
+$('#campClose').onclick = () => { $('#campForm').hidden = true; campId = null; };
+$('#campSave').onclick = async () => {
+  if (!$('#campName').value.trim()) { toast('Give the campaign a name.'); return; }
+  try { await api('/api/streamers/campaign', { id: campId, campaign: { name: $('#campName').value, credit: $('#campCredit').value, tags: $('#campTags').value, rules: $('#campRules').value } }); toast('Campaign saved. The daily queue puts them first now.'); $('#campForm').hidden = true; refresh(); } catch (err) { toast(err.message); }
+};
+$('#campRemove').onclick = async () => { try { await api('/api/streamers/campaign', { id: campId, campaign: null }); $('#campForm').hidden = true; refresh(); } catch (err) { toast(err.message); } };
+function renderResults(s) {
+  if (document.activeElement !== $('#ytChIn')) $('#ytChIn').value = s.cfg.ytChannel || '';
+  const r = s.results;
+  if (!s.cfg.yt) { $('#resBox').textContent = 'Add your YouTube key on the YouTube tab first.'; return; }
+  if (!s.cfg.ytChannel) { $('#resBox').textContent = 'Add your channel handle to start.'; return; }
+  if (!r) { $('#resBox').textContent = 'Not checked yet. Tap Check now.'; return; }
+  const rows = Object.values(r.streamers || {}).sort((a, b) => b.median - a.median);
+  setHTML($('#resBox'), `<p>${esc(r.channel)}: ${r.videos} recent videos, ${r.judged} old enough to judge · middle video ${num(r.median)} views · checked ${ago(r.at)}</p>` +
+    (rows.length ? `<ul class="res">${rows.map((x) => `<li><b>${esc(x.name)}</b> · ${x.videos} video${x.videos === 1 ? '' : 's'} · ${num(x.median)} views usually · ${x.factor > 1.05 ? '📈 pushed up in the queue' : x.factor < 0.95 ? '📉 pushed down' : x.videos < 2 ? 'needs 2+ videos' : 'about average'}${x.best ? ` · best: <a href="${esc(x.best.url)}" target="_blank" rel="noopener">${esc(x.best.title)}</a> (${num(x.best.views)})` : ''}</li>`).join('')}</ul>`
+      : '<p>No videos matched your streamers yet. Keep the credit line (twitch.tv/name) in your descriptions so it can tell who each video is about.</p>'));
+}
+$('#ytChSave').onclick = async () => { try { await api('/api/config', { ytChannel: $('#ytChIn').value }); toast('Saved'); refresh(); } catch (err) { toast(err.message); } };
+$('#resNow').onclick = async (e) => { e.target.disabled = true; try { await api('/api/results', {}); toast('Checked'); refresh(); } catch (err) { toast(err.message); } e.target.disabled = false; };
 $('#clipList').onclick = async (e) => {
   const dl = e.target.closest('[data-dl]'), del = e.target.closest('[data-del]');
   try {
@@ -474,7 +521,7 @@ $('#clipList').onclick = async (e) => {
   } catch (err) { toast(err.message); if (dl) dl.disabled = false; }
 };
 $('#sens').onclick = async (e) => { const b = e.target.closest('button'); if (!b) return; try { await api('/api/config', { sensitivity: b.dataset.v }); refresh(); } catch (err) { toast(err.message); } };
-for (const [id, k] of [['#clipLen', 'clipLen'], ['#maxPer', 'maxPerStream'], ['#cooldown', 'cooldown']]) $(id).onchange = async (e) => { try { await api('/api/config', { [k]: +e.target.value }); toast('Saved'); } catch (err) { toast(err.message); } };
+for (const [id, k] of [['#clipLen', 'clipLen'], ['#maxPer', 'maxPerStream'], ['#cooldown', 'cooldown'], ['#reactDelay', 'reactDelay']]) $(id).onchange = async (e) => { try { await api('/api/config', { [k]: +e.target.value }); toast('Saved'); } catch (err) { toast(err.message); } };
 $('#copyLink').onclick = async () => {
   const link = `${location.origin}/#key=${key}`;
   try { await navigator.clipboard.writeText(link); toast('Link copied. Paste it somewhere private.'); }
