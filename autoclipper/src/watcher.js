@@ -647,13 +647,15 @@ export class Watcher {
   async checkClips() {
     const pending = this.clips.filter((c) => c.status === 'processing');
     const now = this.now();
-    const fix = this.clips.filter((c) => c.status === 'ready' && (c.vodEst || !c.video) && now - c.at < 48 * 3600 * 1000 && now - (c.vodTry || 0) > 10 * 60 * 1000).slice(0, 50);
+    const fix = this.clips.filter((c) => c.status === 'ready' && (c.vodEst || !c.video) && now - c.at < 48 * 3600 * 1000 && now - (c.vodTry || 0) > 5 * 60 * 1000).slice(0, 50);
     if (!pending.length && !fix.length) return;
     const ids = [...pending, ...fix].slice(0, 100).map((c) => c.id);
     const j = await this.helix('/clips', { query: { id: ids } });
+    const exact = new Set((j.data || []).filter((c) => c.vod_offset != null).map((c) => c.id));
+    await this.fillVodGuess(j.data || []);
     const found = new Map((j.data || []).map((c) => [c.id, c]));
     let changed = false;
-    const takeVod = (c, f) => { if (f.video_id && f.vod_offset != null) { c.video = f.video_id; c.vodOffset = f.vod_offset; c.vodEst = false; } };
+    const takeVod = (c, f) => { if (f.video_id && f.vod_offset != null && (exact.has(f.id) || !c.video)) { c.video = f.video_id; c.vodOffset = f.vod_offset; c.vodEst = !exact.has(f.id); } };
     for (const c of fix) { c.vodTry = now; const f = found.get(c.id); if (f) takeVod(c, f); changed = true; }
     for (const c of pending) {
       const f = found.get(c.id);
