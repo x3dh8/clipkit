@@ -1236,6 +1236,13 @@ const vpark = document.createElement('div');
 vpark.style.cssText = 'position:fixed;left:0;bottom:0;width:4px;height:4px;overflow:hidden;opacity:.01;pointer-events:none;z-index:-1';
 document.body.appendChild(vpark);
 function parkVideo(v) { v.style.cssText = 'width:4px;height:4px'; vpark.appendChild(v); return v; }
+// Exports draw on a timer that keeps running when you switch windows or tabs
+// (the normal screen-refresh timer stops then, which made choppy videos)
+function makeTicker(fps, fn) {
+  const w = new Worker(URL.createObjectURL(new Blob([`setInterval(() => postMessage(0), ${Math.max(10, Math.round(1000 / fps))});`], { type: 'text/javascript' })));
+  w.onmessage = () => fn();
+  return () => w.terminate();
+}
 // A canvas recording that gets a frame every time we draw one (steady frame rate even when the canvas is off screen)
 function canvasStream(c, fps) {
   try {
@@ -1531,7 +1538,7 @@ async function runMontage(record) {
   await new Promise((resolve) => {
     const frame = () => {
       const t = actx.currentTime - t0;
-      if (M.stop || t >= plan.total) { resolve(); return; }
+      if (M.stop || t >= plan.total) { stopTick(); resolve(); return; }
       if (t >= 0) {
         let i = plan.segs.findIndex((s) => t < s.out + s.dur); if (i < 0) i = plan.segs.length - 1;
         if (i !== cur) {
@@ -1551,9 +1558,8 @@ async function runMontage(record) {
       if (flashOn && cur > 0) { const k = tt - plan.segs[cur].out; if (k >= 0 && k < 0.09) { mctx.fillStyle = `rgba(255,255,255,${0.55 * (1 - k / 0.09)})`; mctx.fillRect(0, 0, OW, OH); } }
       if (stream && stream.push) stream.push();
       mStatus('#mStatus', `${record ? 'Recording' : 'Playing'}… ${fmt(tt)} of ${fmt(plan.total)}`, tt / plan.total);
-      requestAnimationFrame(frame);
     };
-    requestAnimationFrame(frame);
+    const stopTick = makeTicker(+$('#mFps').value || 30, frame);
   });
   for (const v of pool) v.pause();
   if (songSrc) { try { songSrc.stop(); } catch (e) {} }
@@ -1755,17 +1761,16 @@ async function makeOne(it, o, idx, total) {
   await bv.play();
   const dur = it.seg ? Math.min(it.seg.end, bv.duration || it.seg.end) : (bv.duration || 60), s0 = it.start || 0, span = Math.max(0.1, dur - s0);
   await new Promise((res) => {
-    let lastUi = 0;
+    let lastUi = 0, stopTick = () => {};
     stream.push(true);
     const f = () => {
       const t = bv.currentTime;
       drawBatchFrame(it, t, o); stream.push();
       const done = Math.min(1, Math.max(0, (t - s0) / span)), n = performance.now();
       if (n - lastUi > 250) { lastUi = n; it.msg = `Exporting… ${Math.round(done * 100)}%`; renderBListMsg(it); bStatusLine(prefix + it.msg, (idx + done) / total); }
-      if (bv.ended || B.stop || (it.seg && t >= it.seg.end) || bv.paused && t > s0 + 0.1) { res(); return; }
-      requestAnimationFrame(f);
+      if (bv.ended || B.stop || (it.seg && t >= it.seg.end) || bv.paused && t > s0 + 0.1) { stopTick(); res(); return; }
     };
-    requestAnimationFrame(f);
+    stopTick = makeTicker(o.fps, f);
   });
   bv.pause();
   await new Promise((r) => { rec.onstop = r; rec.stop(); });
@@ -2022,16 +2027,18 @@ $('#expBtn').onclick = async () => {
   if (!mime) { toast("This browser can't record video. Use a recent version of Chrome."); return; }
   ensureAudio(); await actx.resume();
   const fps = +$('#fps').value, br = (+$('#quality').value || 20) * 1e6;
-  const stream = cv.captureStream(fps);
+  const stream = canvasStream(cv, fps);
   dest.stream.getAudioTracks().forEach((tr) => stream.addTrack(tr));
   const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: br, audioBitsPerSecond: 192000 });
+  let stopTick = () => {};
   const parts = []; rec.ondataavailable = (e) => { if (e.data.size) parts.push(e.data); };
   S.exporting = true; cancelReq = false; document.body.classList.add('busy');
   $('#expBtn').disabled = true; $('#dl').hidden = true;
   const len = S.outT - S.inT;
   try {
     video.pause(); await seek(S.inT); draw();
-    rec.start(500);
+    rec.start(500); stream.push(true);
+    stopTick = makeTicker(fps, () => { draw(); stream.push(true); });
     await video.play();
     await new Promise((res) => {
       const iv = setInterval(() => {
@@ -2043,6 +2050,7 @@ $('#expBtn').onclick = async () => {
     video.pause(); draw();
     await new Promise((r) => { rec.onstop = r; rec.stop(); });
   } finally {
+    stopTick();
     stream.getVideoTracks().forEach((t) => t.stop());
     S.exporting = false; document.body.classList.remove('busy'); $('#expBtn').disabled = false;
   }
