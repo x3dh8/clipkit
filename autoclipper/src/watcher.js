@@ -606,6 +606,24 @@ export class Watcher {
     }));
   }
 
+  // twitch.tv VOD link that starts at a moment (seconds into the stream)
+  vodLink(video, off) {
+    if (!video || off == null) return '';
+    const t = Math.max(0, Math.floor(off));
+    return `https://www.twitch.tv/videos/${video}?t=${Math.floor(t / 3600)}h${Math.floor(t % 3600 / 60)}m${t % 60}s`;
+  }
+  // New clips often have no VOD spot yet; guess it from when the clip and the stream's VOD started
+  async fillVodGuess(raw) {
+    const need = raw.filter((c) => c.video_id && c.vod_offset == null);
+    if (!need.length) return raw;
+    this.vodStart = this.vodStart || new Map();
+    const ids = [...new Set(need.map((c) => c.video_id))].filter((id) => !this.vodStart.has(id));
+    for (let i = 0; i < ids.length; i += 100) {
+      try { for (const v of (await this.helix('/videos', { query: { id: ids.slice(i, i + 100) } })).data || []) this.vodStart.set(v.id, Date.parse(v.created_at)); } catch (e) {}
+    }
+    for (const c of need) { const t0 = this.vodStart.get(c.video_id); if (t0) c.vod_offset = Math.max(0, (Date.parse(c.created_at) - t0) / 1000 - (c.duration || 30)); }
+    return raw;
+  }
   async createClip(s, why, top, manual, duration) {
     const L = this.live[s.id] || {};
     const title = (top && top.length ? `${top[0][0]} moment` : 'Hype moment').slice(0, 100);
@@ -614,6 +632,12 @@ export class Watcher {
     if (!d) throw new Error('Twitch did not return a clip.');
     const rec = { id: d.id, title, edit_url: d.edit_url, url: `https://clips.twitch.tv/${d.id}`, broadcaster_id: s.id, login: s.login, name: s.name,
       at: this.now(), why, top: (top || []).map(([t, n]) => `${t} ×${n}`), game: L.game || '', streamTitle: L.title || '', streamKey: L.since || '', status: 'processing', manual: !!manual };
+    // where it is in the stream's VOD, so anyone can clip the same moment themselves (exact spot filled in later)
+    try {
+      const v = ((await this.helix('/videos', { query: { user_id: s.id, type: 'archive', first: '1' } })).data || [])[0];
+      const len = Math.max(duration || 0, this.cfg.clipLen);
+      if (v && (!L.since || Math.abs(Date.parse(v.created_at) - Date.parse(L.since)) < 15 * 60 * 1000)) { rec.video = v.id; rec.vodOffset = Math.max(0, (rec.at - Date.parse(v.created_at)) / 1000 - len); rec.vodEst = true; }
+    } catch (e) {}
     this.clips.unshift(rec); if (this.clips.length > 200) this.clips.length = 200;
     await this.st.put('clips', this.clips);
     this.addLog(`Clipped ${s.name}: ${why}.`);
@@ -622,17 +646,22 @@ export class Watcher {
   }
   async checkClips() {
     const pending = this.clips.filter((c) => c.status === 'processing');
-    if (!pending.length) return;
-    const j = await this.helix('/clips', { query: { id: pending.slice(0, 100).map((c) => c.id) } });
+    const now = this.now();
+    const fix = this.clips.filter((c) => c.status === 'ready' && (c.vodEst || !c.video) && now - c.at < 48 * 3600 * 1000 && now - (c.vodTry || 0) > 10 * 60 * 1000).slice(0, 50);
+    if (!pending.length && !fix.length) return;
+    const ids = [...pending, ...fix].slice(0, 100).map((c) => c.id);
+    const j = await this.helix('/clips', { query: { id: ids } });
     const found = new Map((j.data || []).map((c) => [c.id, c]));
     let changed = false;
+    const takeVod = (c, f) => { if (f.video_id && f.vod_offset != null) { c.video = f.video_id; c.vodOffset = f.vod_offset; c.vodEst = false; } };
+    for (const c of fix) { c.vodTry = now; const f = found.get(c.id); if (f) takeVod(c, f); changed = true; }
     for (const c of pending) {
       const f = found.get(c.id);
       if (f) {
-        c.status = 'ready'; c.thumb = f.thumbnail_url; c.duration = f.duration; c.url = f.url || c.url; changed = true;
+        c.status = 'ready'; c.thumb = f.thumbnail_url; c.duration = f.duration; c.url = f.url || c.url; takeVod(c, f); changed = true;
         if (this.cfg.discord && this.cfg.alerts) this.alertClip(c).catch((e) => this.addLog('Discord alert failed: ' + e.message));
       }
-      else if (this.now() - c.at > 90000) { c.status = 'failed'; changed = true; }
+      else if (now - c.at > 90000) { c.status = 'failed'; changed = true; }
     }
     if (changed) await this.st.put('clips', this.clips);
   }
@@ -665,6 +694,7 @@ export class Watcher {
         this.helix('/clips', { query: { broadcaster_id: s.id, started_at: started, ended_at: ended, first: '50' } }).then((j) => j.data || []).catch(() => [])));
       raw = lists.flat();
     }
+    await this.fillVodGuess(raw);
     const mine = new Set(this.clips.map((c) => c.id));
     const clips = raw.map((c) => {
       const hours = Math.max(0.25, (this.now() - Date.parse(c.created_at)) / 3600000);
@@ -693,6 +723,8 @@ export class Watcher {
     const lines = [];
     if (c.top && c.top.length) lines.push('Chat: ' + c.top.join(', '));
     if (c.game) lines.push('Playing ' + c.game);
+    const vl = this.vodLink(c.video, c.vodOffset);
+    if (vl) lines.push(`[✂️ Clip it yourself from the VOD](${vl})`);
     await this.discord({ embeds: [{ title: `${c.name}: ${c.why}`.slice(0, 250), url: c.url, description: lines.join('\n') || undefined, color: 0xff4f5e,
       image: c.thumb ? { url: c.thumb } : undefined, footer: { text: c.manual ? 'You tapped Clip now' : 'Auto clipped' }, timestamp: new Date(c.at).toISOString() }] });
   }
@@ -714,7 +746,7 @@ export class Watcher {
     const started = new Date(this.now() - 72 * 3600 * 1000).toISOString();
     const lists = await Promise.all(this.cfg.streamers.map((s) =>
       this.helix('/clips', { query: { broadcaster_id: s.id, started_at: started, first: '100' } }).then((j) => j.data || []).catch(() => [])));
-    const raw = lists.flat();
+    const raw = await this.fillVodGuess(lists.flat());
     const picks = bestMoments(raw, this.now(), (c) => Date.parse(c.created_at) >= since, 5);
     const mine = this.clips.filter((c) => c.at >= since && c.status === 'ready');
     const head = manual ? 'Best clips from the last 14 hours' : 'Good morning. Best clips from while you were away';
@@ -983,13 +1015,14 @@ export class Watcher {
     const editor = new Set(this.cfg.streamers.filter((s) => s.editor === true).map((s) => s.id));
     const started = new Date(this.now() - 72 * 3600 * 1000).toISOString();
     const raw = (await Promise.all(this.cfg.streamers.map((s) => this.helix('/clips', { query: { broadcaster_id: s.id, started_at: started, first: '100' } }).then((j) => j.data || []).catch(() => [])))).flat();
+    await this.fillVodGuess(raw);
     const mine = this.clips.filter((x) => x.status === 'ready' && x.at >= since).slice(0, 20);
     const meta = await this.policyMeta([...this.cfg.streamers.map((s) => s.id), ...mine.map((c) => c.broadcaster_id)], raw.map((c) => c.game_id));
     // 1) your own auto clips from the last day
     for (const c of mine) {
       const why = this.skipWhy(meta, { bid: c.broadcaster_id, game: c.game, title: c.title });
       if (why) { skipped.push(why); continue; }
-      items.push({ kind: 'mine', id: c.id, name: c.name, login: c.login, title: c.title || 'stream moment', why: c.why, chat: (c.top || []).join(', '), game: c.game || '', streamTitle: c.streamTitle || '', bid: c.broadcaster_id, url: c.url, thumb: c.thumb, score: 70 + (c.manual ? 5 : 0), ready: editor.has(c.broadcaster_id) });
+      items.push({ kind: 'mine', id: c.id, name: c.name, login: c.login, title: c.title || 'stream moment', why: c.why, chat: (c.top || []).join(', '), game: c.game || '', streamTitle: c.streamTitle || '', vod: this.vodLink(c.video, c.vodOffset), bid: c.broadcaster_id, url: c.url, thumb: c.thumb, score: 70 + (c.manual ? 5 : 0), ready: editor.has(c.broadcaster_id) });
     }
     // 2) the best moments other viewers clipped (rule-breaking clips never count)
     const bad = new Set();
@@ -1044,7 +1077,7 @@ export class Watcher {
     if (preview) return { ok: true, frameErr: this.frameErr || '', thumbs: chosen.map((it) => it.thumb), preview: chosen.map((it) => ({ name: it.name, game: it.game, streamTitle: it.streamTitle, scene: it.scene, titles: it.titles, hashtags: it.hashtags, angle: it.angle })) };
     this.queue = { at: this.now(), items: chosen }; await this.st.put('queue', this.queue);
     const how = (it) => it.ready ? '📥 **Ready:** pull it into ClipKit Batch with *Get clips from my auto clipper*.'
-      : it.kind === 'mine' ? '📥 Download it from your Clips Manager (Clips I\'ve created), then add it in ClipKit Batch.'
+      : it.kind === 'mine' ? '📥 Download it from your Clips Manager (Clips I\'ve created), then add it in ClipKit Batch.' + (it.vod ? ` Or [clip it yourself from the VOD](${it.vod}).` : '')
       : it.editor ? '✂️ Open Trending → Find the best clips and tap **Clip it now**, then pull it into Batch.'
       : it.vod ? `✂️ [Clip it yourself from the VOD](${it.vod}), then download it from your Clips Manager.` : '';
     const embeds = chosen.map((it, i) => ({
