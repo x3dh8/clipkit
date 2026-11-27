@@ -651,7 +651,7 @@ function startLoop() {
   if (looping) return; looping = true;
   const f = () => {
     if (video.currentTime >= S.outT - 0.001 && !video.paused) video.pause();
-    draw(); updateTransport();
+    if (!S.exporting) draw(); updateTransport();
     if (!video.paused && !video.ended) requestAnimationFrame(f); else { looping = false; draw(); updateTransport(); }
   };
   requestAnimationFrame(f);
@@ -1249,9 +1249,12 @@ function parkVideo(v) { v.style.cssText = 'width:4px;height:4px'; vpark.appendCh
 // Exports draw on a timer that keeps running when you switch windows or tabs
 // (the normal screen-refresh timer stops then, which made choppy videos)
 function makeTicker(fps, fn) {
-  const w = new Worker(URL.createObjectURL(new Blob([`setInterval(() => postMessage(0), ${Math.max(10, Math.round(1000 / fps))});`], { type: 'text/javascript' })));
-  w.onmessage = () => fn();
-  return () => w.terminate();
+  // the worker waits for each frame to finish before sending the next, so a slow computer never piles up work
+  const iv = Math.max(10, Math.round(1000 / fps));
+  const w = new Worker(URL.createObjectURL(new Blob([`let last = 0; const tick = () => { last = Date.now(); postMessage(0); }; onmessage = () => setTimeout(tick, Math.max(0, ${iv} - (Date.now() - last))); tick();`], { type: 'text/javascript' })));
+  let dead = false;
+  w.onmessage = () => { if (dead) return; try { fn(); } finally { if (!dead) w.postMessage(0); } };
+  return () => { dead = true; w.terminate(); };
 }
 // A canvas recording that gets a frame every time we draw one (steady frame rate even when the canvas is off screen)
 function canvasStream(c, fps) {
@@ -2053,9 +2056,14 @@ $('#expBtn').onclick = async () => {
     stopTick = makeTicker(fps, () => { draw(); stream.push(true); });
     await video.play();
     await new Promise((res) => {
+      let lastT = -1, lastMove = performance.now();
       const iv = setInterval(() => {
-        const done = video.currentTime - S.inT;
+        const done = video.currentTime - S.inT, n = performance.now();
         expStatus(`Recording… ${fmt(done)} of ${fmt(len)}`, done / len);
+        // if the video stops moving (a stall), nudge it; if it stays stuck, finish with what we have
+        if (video.currentTime !== lastT) { lastT = video.currentTime; lastMove = n; }
+        else if (n - lastMove > 4000 && !video.paused) { video.play().catch(() => {}); }
+        if (n - lastMove > 12000) { clearInterval(iv); toast('The video stopped playing, so the export ended early. Try 30 fps or refresh the page.'); res(); return; }
         if (video.currentTime >= S.outT - 0.001 || video.ended || video.paused || cancelReq) { clearInterval(iv); res(); }
       }, 50);
     });
