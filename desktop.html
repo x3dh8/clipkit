@@ -1231,7 +1231,25 @@ $('#tabs').onclick = (e) => { const b = e.target.closest('button'); if (b && !M.
 /* ---------- montage ---------- */
 const M = { items: [], song: null, songName: '', beats: [], bpm: 0, drop: null, songStart: 0, peaks: null, running: false, stop: false, plan: null };
 const mcv = $('#mout'), mctx = mcv.getContext('2d'); mcv.width = OW; mcv.height = OH;
-const pool = [0, 1, 2].map(() => { const v = document.createElement('video'); v.playsInline = true; v.preload = 'auto'; return v; });
+// iPhones decode videos that aren't on the page slowly, so park helper videos in a tiny invisible spot
+const vpark = document.createElement('div');
+vpark.style.cssText = 'position:fixed;left:0;bottom:0;width:4px;height:4px;overflow:hidden;opacity:.01;pointer-events:none;z-index:-1';
+document.body.appendChild(vpark);
+function parkVideo(v) { v.style.cssText = 'width:4px;height:4px'; vpark.appendChild(v); return v; }
+// A canvas recording that gets a frame every time we draw one (steady frame rate even when the canvas is off screen)
+function canvasStream(c, fps) {
+  try {
+    const s = c.captureStream(0), tr = s.getVideoTracks()[0];
+    if (tr && typeof tr.requestFrame === 'function') {
+      let last = 0; const gap = 1000 / fps - 3;
+      s.push = (force) => { const n = performance.now(); if (force || n - last >= gap) { last = n; tr.requestFrame(); } };
+      return s;
+    }
+    s.getTracks().forEach((x) => x.stop());
+  } catch (e) {}
+  const s = c.captureStream(fps); s.push = () => {}; return s;
+}
+const pool = [0, 1, 2].map(() => { const v = document.createElement('video'); v.playsInline = true; v.preload = 'auto'; parkVideo(v); return v; });
 let gameGain = null, musicGain = null, poolWired = false, mid = 0;
 function wireMontageAudio() {
   ensureAudio(); if (poolWired) return; poolWired = true;
@@ -1493,7 +1511,7 @@ async function runMontage(record) {
     mime = pickMime();
     if (!mime) { toast("This browser can't record video. Use a recent version of Chrome."); }
     else {
-      stream = mcv.captureStream(+$('#mFps').value);
+      stream = canvasStream(mcv, +$('#mFps').value);
       dest.stream.getAudioTracks().forEach((tr) => stream.addTrack(tr));
       rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 16e6, audioBitsPerSecond: 192000 });
       rec.ondataavailable = (e) => { if (e.data.size) parts.push(e.data); };
@@ -1531,6 +1549,7 @@ async function runMontage(record) {
       if (zoomOn) { const b = lastBeat(plan.beats, tt); if (b != null && tt - b < 0.2) z = 1 + 0.07 * (1 - (tt - b) / 0.2) ** 2; }
       renderVideo(mctx, active, layout, z);
       if (flashOn && cur > 0) { const k = tt - plan.segs[cur].out; if (k >= 0 && k < 0.09) { mctx.fillStyle = `rgba(255,255,255,${0.55 * (1 - k / 0.09)})`; mctx.fillRect(0, 0, OW, OH); } }
+      if (stream && stream.push) stream.push();
       mStatus('#mStatus', `${record ? 'Recording' : 'Playing'}… ${fmt(tt)} of ${fmt(plan.total)}`, tt / plan.total);
       requestAnimationFrame(frame);
     };
@@ -1560,7 +1579,7 @@ function unlockVideo(v) { if (v.dataset.unlocked) return; v.dataset.unlocked = '
 const B = { items: [], running: false, stop: false, done: [] };
 let bid = 0;
 const bcv = $('#bout'), bctx2 = bcv.getContext('2d'); bcv.width = OW; bcv.height = OH;
-const bv = document.createElement('video'); bv.playsInline = true; bv.setAttribute('playsinline', ''); bv.preload = 'auto';
+const bv = document.createElement('video'); bv.playsInline = true; bv.setAttribute('playsinline', ''); bv.preload = 'auto'; parkVideo(bv);
 let bvWired = false;
 function wireBatchAudio() { ensureAudio(); if (bvWired) return; bvWired = true; const src = actx.createMediaElementSource(bv); src.connect(actx.destination); src.connect(dest); }
 function cleanHook(name) {
@@ -1728,7 +1747,7 @@ async function makeOne(it, o, idx, total) {
   await seekEl(bv, it.start); drawBatchFrame(it, it.start, o);
   const mime = pickMime();
   if (!mime || !bcv.captureStream) throw new Error("This browser can't record video.");
-  const stream = bcv.captureStream(o.fps);
+  const stream = canvasStream(bcv, o.fps);
   dest.stream.getAudioTracks().forEach((tr) => stream.addTrack(tr));
   const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 16e6, audioBitsPerSecond: 192000 });
   const parts = []; rec.ondataavailable = (e) => { if (e.data.size) parts.push(e.data); };
@@ -1736,12 +1755,13 @@ async function makeOne(it, o, idx, total) {
   await bv.play();
   const dur = it.seg ? Math.min(it.seg.end, bv.duration || it.seg.end) : (bv.duration || 60), s0 = it.start || 0, span = Math.max(0.1, dur - s0);
   await new Promise((res) => {
+    let lastUi = 0;
+    stream.push(true);
     const f = () => {
       const t = bv.currentTime;
-      drawBatchFrame(it, t, o);
-      const done = Math.min(1, Math.max(0, (t - s0) / span));
-      it.msg = `Exporting… ${Math.round(done * 100)}%`; renderBListMsg(it);
-      bStatusLine(prefix + it.msg, (idx + done) / total);
+      drawBatchFrame(it, t, o); stream.push();
+      const done = Math.min(1, Math.max(0, (t - s0) / span)), n = performance.now();
+      if (n - lastUi > 250) { lastUi = n; it.msg = `Exporting… ${Math.round(done * 100)}%`; renderBListMsg(it); bStatusLine(prefix + it.msg, (idx + done) / total); }
       if (bv.ended || B.stop || (it.seg && t >= it.seg.end) || bv.paused && t > s0 + 0.1) { res(); return; }
       requestAnimationFrame(f);
     };
