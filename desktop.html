@@ -264,7 +264,7 @@ body.mmbusy .tabs,body.mmbusy #mmSettings,body.mmbusy #mmPick{pointer-events:non
       <h3>Export</h3>
       <div class="grid2">
         <label>Frame rate<select id="fps"><option value="30">30 fps</option><option value="60">60 fps</option></select></label>
-        <label>Quality<select id="quality"><option value="6">Good</option><option value="10" selected>High</option><option value="16">Max</option></select></label>
+        <label>Quality<select id="quality"><option value="8">Good</option><option value="14">High</option><option value="20" selected>Max</option></select></label>
       </div>
       <button class="btn primary wide" id="expBtn">Export vertical clip</button>
       <div class="status" id="expStatus" hidden><div class="bar"><i></i></div><span></span><button class="btn wide" id="cancelBtn">Cancel</button></div>
@@ -464,7 +464,7 @@ const S = {
 // remembered style settings
 try {
   const saved = JSON.parse(localStorage.getItem('clipkit-style') || 'null');
-  if (saved) { Object.assign(S.cap, saved.cap || {}); if (saved.fps) $('#fps').value = saved.fps; if (saved.q) $('#quality').value = saved.q; if (saved.layout) S.layout = saved.layout; }
+  if (saved) { Object.assign(S.cap, saved.cap || {}); if (saved.fps) $('#fps').value = saved.fps; if (saved.q) { $('#quality').value = saved.q; if (!$('#quality').value || +saved.q < 14) $('#quality').value = '20'; } if (saved.layout) S.layout = saved.layout; }
 } catch (e) {}
 function saveStyle() {
   try { localStorage.setItem('clipkit-style', JSON.stringify({ cap: { font: S.cap.font, size: S.cap.size, per: S.cap.per, hi: S.cap.hi, upper: S.cap.upper }, fps: $('#fps').value, q: $('#quality').value, layout: S.layout })); } catch (e) {}
@@ -1495,7 +1495,7 @@ async function runMontage(record) {
     else {
       stream = mcv.captureStream(+$('#mFps').value);
       dest.stream.getAudioTracks().forEach((tr) => stream.addTrack(tr));
-      rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 12e6, audioBitsPerSecond: 192000 });
+      rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 16e6, audioBitsPerSecond: 192000 });
       rec.ondataavailable = (e) => { if (e.data.size) parts.push(e.data); };
     }
   }
@@ -1730,7 +1730,7 @@ async function makeOne(it, o, idx, total) {
   if (!mime || !bcv.captureStream) throw new Error("This browser can't record video.");
   const stream = bcv.captureStream(o.fps);
   dest.stream.getAudioTracks().forEach((tr) => stream.addTrack(tr));
-  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 10e6, audioBitsPerSecond: 192000 });
+  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 16e6, audioBitsPerSecond: 192000 });
   const parts = []; rec.ondataavailable = (e) => { if (e.data.size) parts.push(e.data); };
   rec.start(500);
   await bv.play();
@@ -2001,7 +2001,7 @@ $('#expBtn').onclick = async () => {
   const mime = pickMime();
   if (!mime) { toast("This browser can't record video. Use a recent version of Chrome."); return; }
   ensureAudio(); await actx.resume();
-  const fps = +$('#fps').value, br = +$('#quality').value * 1e6;
+  const fps = +$('#fps').value, br = (+$('#quality').value || 20) * 1e6;
   const stream = cv.captureStream(fps);
   dest.stream.getAudioTracks().forEach((tr) => stream.addTrack(tr));
   const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: br, audioBitsPerSecond: 192000 });
