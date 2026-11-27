@@ -638,9 +638,11 @@ export class Watcher {
       const len = Math.max(duration || 0, this.cfg.clipLen);
       if (v && (!L.since || Math.abs(Date.parse(v.created_at) - Date.parse(L.since)) < 15 * 60 * 1000)) { rec.video = v.id; rec.vodOffset = Math.max(0, (rec.at - Date.parse(v.created_at)) / 1000 - len); rec.vodEst = true; }
     } catch (e) {}
+    if (L.since) rec.streamAt = Math.max(0, (rec.at - Date.parse(L.since)) / 1000 - Math.max(duration || 0, this.cfg.clipLen));
     this.clips.unshift(rec); if (this.clips.length > 200) this.clips.length = 200;
     await this.st.put('clips', this.clips);
     this.addLog(`Clipped ${s.name}: ${why}.`);
+    if (this.cfg.discord && this.cfg.alerts) this.alertClip(rec).catch((e) => this.addLog('Discord alert failed: ' + e.message));
     await this.kick(20000);
     return { ok: true, clip: rec };
   }
@@ -675,7 +677,7 @@ export class Watcher {
         c.status = 'ready'; c.thumb = f.thumbnail_url; c.duration = f.duration; c.url = f.url || c.url; takeVod(c, f); changed = true;
         if (this.cfg.discord && this.cfg.alerts) this.alertClip(c).catch((e) => this.addLog('Discord alert failed: ' + e.message));
       }
-      else if (now - c.at > 90000) { c.status = 'failed'; changed = true; }
+      else if (now - c.at > 90000) { c.status = 'failed'; changed = true; if (c.msgId) this.alertClip(c).catch(() => {}); }
     }
     if (changed) await this.st.put('clips', this.clips);
   }
@@ -731,16 +733,33 @@ export class Watcher {
       if (r.status === 404 || r.status === 401) throw new Error('Discord says that webhook no longer exists. Paste a new one.');
       throw new Error(`Discord said ${r.status}.`);
     }
-    return true;
+    const m = await r.json().catch(() => null);
+    return (m && m.id) || true;
   }
-  async alertClip(c) {
+  async discordEdit(id, payload, hook) {
+    const url = hook || this.cfg.discord;
+    if (!url || !id || id === true) return false;
+    const r = await fetch(`${url}/messages/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ allowed_mentions: { parse: [] }, ...payload }) });
+    return r.ok;
+  }
+  // hh:mm:ss into the stream
+  streamTime(sec) { sec = Math.max(0, Math.floor(sec)); const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), x = sec % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); }
+  alertPayload(c) {
     const lines = [];
-    if (c.top && c.top.length) lines.push('Chat: ' + c.top.join(', '));
-    if (c.game) lines.push('Playing ' + c.game);
+    if (c.streamAt != null) lines.push(`⏱️ **${this.streamTime(c.streamAt)}** into the stream`);
+    if (c.top && c.top.length) lines.push('💬 Chat: ' + c.top.join(', '));
+    if (c.game) lines.push('🎮 ' + c.game);
     const vl = this.vodLink(c.video, c.vodOffset);
     if (vl) lines.push(`[✂️ Clip it yourself from the VOD](${vl})`);
-    await this.discord({ embeds: [{ title: `${c.name}: ${c.why}`.slice(0, 250), url: c.url, description: lines.join('\n') || undefined, color: 0xff4f5e,
-      image: c.thumb ? { url: c.thumb } : undefined, footer: { text: c.manual ? 'You tapped Clip now' : 'Auto clipped' }, timestamp: new Date(c.at).toISOString() }] });
+    lines.push(c.status === 'ready' ? `[▶️ Watch the clip](${c.url})` : c.status === 'failed' ? '⚠️ Twitch couldn\'t make this clip. Use the VOD link instead.' : '⏳ Twitch is still making the clip…');
+    return { embeds: [{ title: `${c.name}: ${c.why}`.slice(0, 250), url: c.status === 'ready' ? c.url : (vl || undefined), description: lines.join('\n'), color: c.status === 'failed' ? 0x888888 : 0xff4f5e,
+      image: c.thumb ? { url: c.thumb } : undefined, footer: { text: c.manual ? 'You tapped Clip now' : 'Auto clipped' }, timestamp: new Date(c.at).toISOString() }] };
+  }
+  // sent the moment the clip is made, then updated when Twitch finishes it
+  async alertClip(c) {
+    if (c.msgId) { if (await this.discordEdit(c.msgId, this.alertPayload(c))) return; }
+    const id = await this.discord(this.alertPayload(c));
+    if (id && id !== true) { c.msgId = id; c.sentAt = this.now(); await this.st.put('clips', this.clips); }
   }
   localNow() {
     let p;

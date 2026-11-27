@@ -247,6 +247,7 @@ details ol{margin-top:6px}
     <section class="card">
       <h2>Clips <span class="n" id="clipCount"></span></h2>
       <p class="mute small">Download clips, then drop them all into <a href="https://x3dh8.github.io/clipkit/#batch" target="_blank" rel="noopener">ClipKit Batch</a> to turn them into finished vertical videos with captions and a title.</p>
+      <label class="mute small" id="sentRow" hidden style="display:flex;gap:8px;align-items:center;margin:6px 0"><input type="checkbox" id="showSent"> Show clips already sent to Discord (<span id="sentN"></span>)</label>
       <div class="clips" id="clipList"></div>
     </section>
 
@@ -370,6 +371,7 @@ async function refresh() {
   if (!s.connected) { show('#vConnect'); $('#connectMsg').textContent = s.broken ? 'Your Twitch sign-in expired. Connect again to keep clipping.' : 'Clips get made on your account, the same as tapping Clip yourself.'; setPill('Not connected'); return; }
   show('#vMain'); render();
 }
+$('#showSent').onchange = (e) => { try { localStorage.setItem('acShowSent', e.target.checked ? '1' : '0'); } catch (x) {} if (S) render(); };
 function setPill(text, on) { $('#pill').classList.toggle('on', !!on); $('#pill span').textContent = text; }
 function render() {
   const s = S, live = s.streamers.filter((x) => x.live);
@@ -383,12 +385,17 @@ function render() {
     const chat = x.live ? (x.base == null ? 'Learning normal chat speed…' : `${x.rate} people chatting now · normal ${x.base}` + (x.style === 'talk' ? ` · ${x.agree} agreeing` : '')) : '';
     return `<div class="st"><img src="${esc(x.avatar)}" alt="" loading="lazy"><div><b>${esc(x.name)} <span class="badge${x.live ? '' : ' off'}">${x.live ? 'LIVE' : 'OFF'}</span>${x.editor === true ? ' <span class="edtag">EDITOR ✓</span>' : ''}</b><small>${sub}</small>${x.live ? `<small>${chat}</small><div class="meter"><i style="width:${pct}%"></i></div>` : ''}<div class="style" role="group" aria-label="Clip style for ${esc(x.name)}"><button data-style="hype" data-sid="${esc(x.id)}" class="${x.style !== 'talk' ? 'on' : ''}">Hype</button><button data-style="talk" data-sid="${esc(x.id)}" class="${x.style === 'talk' ? 'on' : ''}">Talk</button></div>${x.editor === true ? '' : `<div><button class="edcheck" data-edcheck="${esc(x.id)}">${x.editor === false ? 'Not an editor yet · check again' : 'Check editor access'}</button></div>`}</div><div class="acts">${x.live ? `<button class="btn mini" data-clip="${esc(x.id)}">Clip now</button>` : ''}<button class="btn mini" data-rm="${esc(x.id)}" aria-label="Remove ${esc(x.name)}">✕</button></div></div>`;
   }).join('') : '<div class="empty">No streamers yet. Add a few you like to clip.</div>');
-  $('#clipCount').textContent = s.clips.length ? `${s.clips.length}` : '';
-  setHTML($('#clipList'), s.clips.length ? s.clips.map((c) => {
+  // clips already in Discord are hidden here so this list is just what's new (tick the box to see them)
+  let showSent = false; try { showSent = localStorage.getItem('acShowSent') === '1'; } catch (e) {}
+  const isSent = (c) => !!c.msgId && c.status !== 'processing';
+  const sentN = s.clips.filter(isSent).length, shown = showSent ? s.clips : s.clips.filter((c) => !isSent(c));
+  $('#sentRow').hidden = !sentN; $('#sentN').textContent = sentN; $('#showSent').checked = showSent;
+  $('#clipCount').textContent = shown.length ? `${shown.length}` : '';
+  setHTML($('#clipList'), shown.length ? shown.map((c) => {
     const th = c.thumb ? `style="background-image:url('${esc(c.thumb)}')"` : '';
     const label = c.status === 'processing' ? 'Processing…' : c.status === 'failed' ? 'Twitch couldn’t make this one' : '';
     return `<article class="clip"><div class="thumb" ${th}>${label}<span>${esc(c.name)}</span></div><div class="cbody"><b>${esc(c.why)}</b><small>${ago(c.at)}${c.game ? ' · ' + esc(c.game) : ''}${c.manual ? ' · by you' : ''}</small>${c.top && c.top.length ? `<div class="tags">${c.top.map((t) => `<em>${esc(t)}</em>`).join('')}</div>` : ''}<div class="cacts"><a class="btn mini" href="${esc(c.url)}" target="_blank" rel="noopener">Watch</a>${c.video && c.vodOffset != null ? `<a class="btn mini" href="https://www.twitch.tv/videos/${esc(c.video)}?t=${vodTime(c.vodOffset).q}" target="_blank" rel="noopener" title="Opens the stream at this moment so anyone can clip it on their own account">Clip it yourself</a>` : ''}<button class="btn mini" data-dl="${esc(c.id)}"${c.status !== 'ready' ? ' disabled' : ''}>Download</button><button class="btn mini" data-del="${esc(c.id)}" aria-label="Remove from list">✕</button></div>${notes[c.id] || ''}</div></article>`;
-  }).join('') : '<div class="empty">No clips yet. When chat explodes on a live stream, clips show up here.</div>');
+  }).join('') : `<div class="empty">${sentN ? 'All caught up. Every clip is in your Discord.' : 'No clips yet. When chat explodes on a live stream, clips show up here.'}</div>`);
   for (const b of $('#sens').children) b.classList.toggle('on', b.dataset.v === s.cfg.sensitivity);
   $('#sensHint').textContent = SENS_HINT[s.cfg.sensitivity];
   const hasDc = !!s.cfg.discord;
