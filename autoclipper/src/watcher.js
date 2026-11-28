@@ -256,6 +256,8 @@ export class Watcher {
       if (path === '/api/clips/download' && method === 'POST') return json(await this.download(body.id));
       if (path === '/api/trending') return json(await this.trending(url.searchParams));
       if (path === '/api/ai/moments' && method === 'POST') return json(await this.aiMoments(body));
+      if (path === '/api/ai/postcopy' && method === 'POST') { try { return json(await this.postCopy(body)); } catch (e) { return json({ error: e.message }, 400); } }
+      if (path === '/api/streamers/names') return json({ streamers: this.cfg.streamers.map((x) => ({ login: x.login, name: x.name, campaign: x.campaign ? x.campaign.name : null })) });
       if (path === '/api/youtube/key' && method === 'POST') {
         const k = String(body.key || '').trim();
         if (!k) { this.cfg.ytKey = ''; await this.st.put('cfg', this.cfg); return json({ ok: true }); }
@@ -1018,6 +1020,48 @@ export class Watcher {
       const out = typeof r.response === 'string' ? JSON.parse(r.response) : r.response;
       return out && Array.isArray(out.clips) ? out.clips : null;
     } catch (e) { return null; }
+  }
+  // Writes ready-to-paste YouTube / TikTok / Instagram copy for a finished video (ClipKit's "Post it" button)
+  async postCopy(b) {
+    const raw = String(b.streamer || '').trim().replace(/^@/, '');
+    if (!raw) throw new Error('Pick which streamer is in the video.');
+    const st = this.cfg.streamers.find((x) => (x.login || '').toLowerCase() === raw.toLowerCase() || (x.name || '').toLowerCase() === raw.toLowerCase());
+    const name = st ? st.name : raw.slice(0, 40), login = st ? st.login : (/^\w{3,25}$/.test(raw) ? raw.toLowerCase() : '');
+    const camp = st && st.campaign ? st.campaign : null;
+    const said = String(b.transcript || '').replace(/\s+/g, ' ').trim().slice(0, 2500), hook = String(b.hook || '').trim().slice(0, 120), note = String(b.note || '').trim().slice(0, 300);
+    if (!said && !hook && !note) throw new Error('Add captions, a title or a short note about what happens first.');
+    if (!this.env || !this.env.AI) throw new Error('AI is not set up on the auto clipper.');
+    const sys = 'You write posting copy for short vertical clips of Twitch streamers, for YouTube Shorts, TikTok and Instagram Reels. Write like a real clipper: casual, punchy, a little funny, one emoji at most per line. Every title and caption must name the streamer. Use only what happens in the transcript, title and note; NEVER invent events, quotes or outcomes, and never claim something is real if it might be a joke or a bit. A short quote from the transcript makes a great hook. Never make the streamer look bad (no "L", "exposed", "fail", mocking or fake drama), never insult or sexualize anyone, no slurs, no gambling sites, promo codes or sponsors, no links. YouTube titles: under 70 characters, 3 different options. YouTube line: one or two sentences for the description. TikTok caption: one line, under 120 characters. Instagram caption: one line, a little longer is fine. Tags: 6 to 10 lowercase YouTube search tags (streamer name variations, the game or topic, kind of moment). Hashtags: 2 to 3 relevant ones without the streamer name (like #chess or #thanksgiving), no #fyp or #viral.' + (camp && camp.rules ? ` This streamer has a paid campaign with these rules, follow them: ${camp.rules}` : '');
+    const user = `Streamer: ${name}${login ? ' (twitch.tv/' + login + ')' : ''}\n${hook ? 'On-screen title: ' + hook + '\n' : ''}${note ? 'Note from the clipper: ' + note + '\n' : ''}${said ? 'What is said in the clip (auto captions, may have small errors): ' + said : ''}`;
+    const schema = { type: 'object', properties: { titles: { type: 'array', items: { type: 'string' } }, ytLine: { type: 'string' }, tiktok: { type: 'string' }, instagram: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, hashtags: { type: 'array', items: { type: 'string' } } }, required: ['titles', 'ytLine', 'tiktok', 'instagram', 'tags', 'hashtags'] };
+    let out = null;
+    for (let i = 0; i < 2 && !out; i++) {
+      try {
+        const r = await this.env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', { messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], response_format: { type: 'json_schema', json_schema: schema }, max_tokens: 900, temperature: 0.7 });
+        const o = typeof r.response === 'string' ? JSON.parse(r.response) : r.response;
+        if (o && Array.isArray(o.titles) && o.titles.length) out = o;
+      } catch (e) {}
+    }
+    if (!out) throw new Error('The AI is busy. Try again in a minute.');
+    const clean = (t) => String(t || '').replace(BAD_WORDS, '').replace(/https?:\/\/\S+/g, '').replace(/#\S+/g, '').replace(/\s+/g, ' ').trim();
+    const tag = (t) => '#' + String(t).replace(/[^\p{L}\p{N}_]/gu, '');
+    const nameTag = camp && camp.tags.length ? null : tag(name.replace(/\s+/g, ''));
+    const extra = (out.hashtags || []).map(tag).filter((t) => t.length > 2 && !/^#(fyp|foryou|foryoupage|viral|trending|explore|shorts)$/i.test(t) && !BAD_WORDS.test(t));
+    const uniq = (a) => { const seen = new Set(); return a.filter((t) => t && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase())); };
+    const req = camp ? camp.tags : [];
+    const credit = camp && camp.credit ? camp.credit : `Clip from ${name}'s stream${login ? `: twitch.tv/${login}` : ''}. All credit to ${name}.`;
+    const yt = uniq(['#shorts', ...req, nameTag, ...extra]).slice(0, Math.max(5, req.length + 1));
+    const social = uniq([...req, nameTag, ...extra, '#twitchclips']).slice(0, Math.max(4, req.length));
+    const res = {
+      streamer: name, campaign: camp ? { name: camp.name, rules: camp.rules } : null,
+      youtube: { titles: [...new Set(out.titles.map(clean).filter((t) => t.length > 5).map((t) => t.slice(0, 100)))].slice(0, 3), description: `${clean(out.ytLine)}\n${credit}\n${yt.join(' ')}`, tags: uniq((out.tags || []).map((t) => String(t).toLowerCase().replace(/[^\p{L}\p{N} ]/gu, '').trim()).filter(Boolean)).slice(0, 10).join(', ') },
+      tiktok: `${clean(out.tiktok)} ${social.join(' ')}`.trim(),
+      instagram: `${clean(out.instagram)}\n\n🎥 ${credit}\n${social.join(' ')}`,
+    };
+    // safety check on everything it wrote
+    const ok = await this.guard([...res.youtube.titles, res.youtube.description, res.tiktok, res.instagram].join('\n'));
+    if (ok === false) throw new Error("The AI wrote something that could break platform rules, so it was thrown out. Try again or add a note about what happens.");
+    return res;
   }
   // Looks at the clip's thumbnail frame and says what's in it (no names)
   async describeFrame(url) {

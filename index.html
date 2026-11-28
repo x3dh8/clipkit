@@ -156,6 +156,7 @@ body.mmbusy .tabs,body.mmbusy #mmSettings,body.mmbusy #mmPick{pointer-events:non
 #toast.show{opacity:1}
 .projbar{display:flex;align-items:center;gap:10px;margin:10px 0 4px}.projbar span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--mute);font-size:14px}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
+.postit{margin-top:18px;padding-top:14px;border-top:1px solid rgba(255,255,255,.1);display:grid;gap:8px}.posth{margin:0;font-size:16px}.pcard{border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:10px 12px;display:grid;gap:6px;margin-top:8px}.pcard b{font-size:14px}.prow{display:flex;gap:8px;align-items:flex-start}.prow pre{flex:1;margin:0;white-space:pre-wrap;word-break:break-word;font:inherit;font-size:14px;opacity:.92}.prow .btn{flex:none;padding:6px 10px;font-size:13px}.pcamp{font-size:13px;color:#ffd23f}
 </style>
 </head>
 <body>
@@ -276,6 +277,14 @@ body.mmbusy .tabs,body.mmbusy #mmSettings,body.mmbusy #mmPick{pointer-events:non
       <a class="btn wide" id="dl" hidden>Download</a>
     </div>
     <p class="hint">Export plays the clip in real time, so a 30-second clip takes about 30 seconds. Keep the screen on and stay in this app.</p>
+    <div class="postit">
+      <h3 class="posth">Post it: titles, descriptions and tags</h3>
+      <p class="hint" id="postHint">Writes your YouTube, TikTok and Instagram copy from this clip's captions and title.</p>
+      <div class="grid2"><label>Streamer<select id="postWho"></select></label><label id="postOtherL" hidden>Their Twitch name<input id="postOther" placeholder="e.g. jynxzi" autocomplete="off" autocapitalize="off"></label></div>
+      <label>What happens (optional)<input id="postNote" maxlength="300" placeholder="e.g. he gets checkmated and rages" autocomplete="off"></label>
+      <button class="btn wide" id="postBtn">Write my posts</button>
+      <div id="postOut"></div>
+    </div>
   </section>
 </main>
 
@@ -735,6 +744,7 @@ function loadFile(f) {
   setView('clip');
   S.file = f; pcm = null; S.words = []; S.groups = []; S.boxes = {};
   clearProjectText();
+  $('#postOut').innerHTML = ''; $('#postNote').value = ''; loadPostWho();
   $('#projName').textContent = f.name;
   renderCapList(); $('#dl').hidden = true; resetHL();
   $('#fname').textContent = f.name;
@@ -1836,6 +1846,45 @@ if (location.hash === '#moments') setTimeout(() => setView('moments'), 0);
 
 /* ---------- pull clips from the auto clipper (channels you edit) ---------- */
 const genericTitle = (t) => !t || /^(hype moment|best moment|.{1,18} moment)$/i.test(t);
+// ---------- Post it: copy for YouTube / TikTok / Instagram ----------
+let postList = null;
+async function loadPostWho() {
+  const c = acConf(), sel = $('#postWho');
+  if (!c) { $('#postHint').textContent = 'Connect your auto clipper first (paste its link in the Batch tab). It writes the posts.'; $('#postBtn').disabled = true; return; }
+  $('#postBtn').disabled = false;
+  if (!postList) { try { postList = (await (await fetch(c.origin + '/api/streamers/names', { headers: { 'x-clipkit-key': c.key } })).json()).streamers || []; } catch (e) { postList = []; } }
+  const fname = (S.file && S.file.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const guess = postList.find((x) => fname.includes((x.login || '').toLowerCase()) || fname.includes((x.name || '').toLowerCase().replace(/[^a-z0-9]/g, '')) || (x.login && fname.startsWith(x.login.slice(0, 4).toLowerCase())));
+  const cur = sel.value;
+  sel.innerHTML = postList.map((x) => `<option value="${x.login}">${x.name}${x.campaign ? ' 💰' : ''}</option>`).join('') + '<option value="__other">Someone else…</option>';
+  sel.value = cur && [...sel.options].some((o) => o.value === cur) ? cur : guess ? guess.login : (postList[0] ? postList[0].login : '__other');
+  $('#postOtherL').hidden = sel.value !== '__other';
+}
+$('#postWho').onchange = () => { $('#postOtherL').hidden = $('#postWho').value !== '__other'; };
+const escP = (t) => String(t).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+function postRow(text) { return `<div class="prow"><pre>${escP(text)}</pre><button class="btn" data-copy="${escP(text)}">Copy</button></div>`; }
+$('#postBtn').onclick = async () => {
+  const c = acConf(); if (!c) return;
+  const who = $('#postWho').value === '__other' ? $('#postOther').value.trim() : $('#postWho').value;
+  if (!who) { toast('Pick the streamer first.'); return; }
+  const btn = $('#postBtn'); btn.disabled = true; btn.textContent = 'Writing…';
+  try {
+    const r = await fetch(c.origin + '/api/ai/postcopy', { method: 'POST', headers: { 'content-type': 'application/json', 'x-clipkit-key': c.key }, body: JSON.stringify({ streamer: who, transcript: (S.words || []).map((w) => w.t).join(' '), hook: (S.hook && S.hook.text) || '', note: $('#postNote').value }) });
+    const j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || 'Something went wrong.');
+    $('#postOut').innerHTML =
+      (j.campaign ? `<p class="pcamp">💰 ${escP(j.campaign.name)} campaign: submit each post's link on Content Rewards.</p>` : '') +
+      `<div class="pcard"><b>YouTube Shorts: pick a title</b>${j.youtube.titles.map(postRow).join('')}<b>Description</b>${postRow(j.youtube.description)}<b>Tags</b>${postRow(j.youtube.tags)}<span class="hint">Audience: Not made for kids</span></div>` +
+      `<div class="pcard"><b>TikTok caption</b>${postRow(j.tiktok)}<span class="hint">Leave TikTok's auto-captions off and turn on HD upload.</span></div>` +
+      `<div class="pcard"><b>Instagram Reels caption</b>${postRow(j.instagram)}</div>` +
+      '<p class="hint">Read it over before posting: the AI only knows what is in the captions and your note.</p>';
+  } catch (e) { toast(e.message); }
+  btn.disabled = false; btn.textContent = 'Write my posts';
+};
+$('#postOut').onclick = async (e) => {
+  const b = e.target.closest('[data-copy]'); if (!b) return;
+  try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = 'Copied'; setTimeout(() => { b.textContent = 'Copy'; }, 1200); } catch (x) { toast("Couldn't copy. Press and hold the text to copy it."); }
+};
 function acConf() {
   try { const raw = localStorage.getItem('clipkit-ac') || ''; const u = new URL(raw); const k = (u.hash.match(/key=([a-f0-9]+)/) || [])[1]; return k ? { origin: u.origin, key: k } : null; }
   catch (e) { return null; }
