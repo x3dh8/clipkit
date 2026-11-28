@@ -27,6 +27,7 @@ header{display:flex;align-items:center;gap:14px;height:56px;padding:0 20px;borde
 .btn:disabled{opacity:.45;cursor:not-allowed}
 .btn.wide{width:100%;margin-top:10px}
 select{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 8px;min-height:36px;width:100%}
+input[type=text],input:not([type]),input[type=search]{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 8px;min-height:36px;width:100%;box-sizing:border-box}
 main,#mview,#bview{display:grid;grid-template-columns:minmax(0,1fr) var(--pw) 340px;gap:16px;padding:16px 20px;height:calc(100vh - 56px);--pw:min(28vw,calc((100vh - 140px)*9/16))}
 @media(max-width:1150px){main,#mview,#bview{grid-template-columns:minmax(0,1fr) var(--pw);grid-template-rows:auto auto;height:auto;min-height:calc(100vh - 56px)}body{overflow:auto}aside{grid-column:1/-1;max-height:none!important}}
 .pane{display:flex;flex-direction:column;gap:10px;min-height:0}
