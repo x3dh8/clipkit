@@ -1060,7 +1060,7 @@ Example. Input: Streamer Jynxzi. Said: "bro we have this coming... start firing 
     const user = `Streamer: ${name}${login ? ' (twitch.tv/' + login + ')' : ''}\n${hook ? 'On-screen title: ' + hook + '\n' : ''}${note ? 'Note from the clipper: ' + note + '\n' : ''}${said ? 'What is said in the clip (auto captions, may have small errors): ' + said : ''}`;
     const schema = { type: 'object', properties: { titles: { type: 'array', items: { type: 'string' } }, ytLine: { type: 'string' }, tiktok: { type: 'string' }, instagram: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, hashtags: { type: 'array', items: { type: 'string' } } }, required: ['titles', 'ytLine', 'tiktok', 'instagram', 'tags', 'hashtags'] };
     const MODELS = { llama: '@cf/meta/llama-3.3-70b-instruct-fp8-fast', gptoss: '@cf/openai/gpt-oss-120b', inkling: '@cf/thinkingmachines/inkling-2-small' };
-    const order = b.model && MODELS[b.model] ? [b.model] : ['gptoss', 'llama'];
+    const order = b.model && MODELS[b.model] ? [b.model] : ['llama', 'gptoss']; // Llama tested more accurate about who did what
     let out = null; this.postErr = [];
     for (const m of order) {
       if (out) break;
