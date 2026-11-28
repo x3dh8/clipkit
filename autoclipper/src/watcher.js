@@ -1021,6 +1021,20 @@ export class Watcher {
       return out && Array.isArray(out.clips) ? out.clips : null;
     } catch (e) { return null; }
   }
+  // Ask a chat model for JSON, whatever reply shape that model uses
+  async chatJSON(model, sys, user, schema) {
+    const msgs = [{ role: 'system', content: sys }, { role: 'user', content: user }];
+    const opts = model.includes('llama') ? { messages: msgs, response_format: { type: 'json_schema', json_schema: schema }, max_tokens: 900, temperature: 0.8 }
+      : model.includes('gpt-oss') ? { instructions: sys, input: user, reasoning: { effort: 'low' }, max_output_tokens: 2500 }
+      : { messages: msgs, max_tokens: 1200, temperature: 0.8 };
+    const r = await Promise.race([this.env.AI.run(model, opts), new Promise((_, no) => setTimeout(() => no(new Error('slow')), 45000))]);
+    let t = r && (r.response ?? r.output_text ?? (r.choices && r.choices[0] && r.choices[0].message && r.choices[0].message.content));
+    if (t == null && r && Array.isArray(r.output)) t = r.output.filter((x) => x.type === 'message').flatMap((x) => x.content || []).map((c) => c.text || '').join('');
+    if (t && typeof t === 'object') return t;
+    const m = String(t || '').match(/\{[\s\S]*\}/);
+    if (!m) throw new Error('no JSON in reply: ' + JSON.stringify(r).slice(0, 200));
+    return JSON.parse(m[0]);
+  }
   // Writes ready-to-paste YouTube / TikTok / Instagram copy for a finished video (ClipKit's "Post it" button)
   async postCopy(b) {
     const raw = String(b.streamer || '').trim().replace(/^@/, '');
@@ -1042,26 +1056,29 @@ Example. Input: Streamer Lacy. Said: "when I say big bucks, big bucks for buddy.
 Example. Input: Streamer Jynxzi. Said: "bro we have this coming... start firing on... this is here... I just got checkmated." Good output: titles ["Jynxzi Was SO Sure He Had This Chess Game", "Jynxzi Gets Checkmated Out of Nowhere 😭", "\\"I Just Got Checkmated\\" – Jynxzi"], tiktok "Jynxzi was SO sure he had this 😭", hashtags ["#chess", "#checkmate"].` + (camp && camp.rules ? ` This streamer has a paid campaign; follow its rules exactly: ${camp.rules}` : '');
     const user = `Streamer: ${name}${login ? ' (twitch.tv/' + login + ')' : ''}\n${hook ? 'On-screen title: ' + hook + '\n' : ''}${note ? 'Note from the clipper: ' + note + '\n' : ''}${said ? 'What is said in the clip (auto captions, may have small errors): ' + said : ''}`;
     const schema = { type: 'object', properties: { titles: { type: 'array', items: { type: 'string' } }, ytLine: { type: 'string' }, tiktok: { type: 'string' }, instagram: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, hashtags: { type: 'array', items: { type: 'string' } } }, required: ['titles', 'ytLine', 'tiktok', 'instagram', 'tags', 'hashtags'] };
-    let out = null;
-    for (let i = 0; i < 2 && !out; i++) {
+    const MODELS = { llama: '@cf/meta/llama-3.3-70b-instruct-fp8-fast', gptoss: '@cf/openai/gpt-oss-120b', inkling: '@cf/thinkingmachines/inkling-2-small' };
+    const order = b.model && MODELS[b.model] ? [b.model] : ['gptoss', 'llama'];
+    let out = null; this.postErr = [];
+    for (const m of order) {
+      if (out) break;
       try {
-        const r = await this.env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', { messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], response_format: { type: 'json_schema', json_schema: schema }, max_tokens: 900, temperature: 0.8 });
-        const o = typeof r.response === 'string' ? JSON.parse(r.response) : r.response;
-        if (o && Array.isArray(o.titles) && o.titles.length) out = o;
-      } catch (e) {}
+        const o = await this.chatJSON(MODELS[m], sys, user + '\n\nReply with only a JSON object with keys: titles (array of 3 strings), ytLine, tiktok, instagram, tags (array), hashtags (array).', schema);
+        if (o && Array.isArray(o.titles) && o.titles.length) { out = o; out.model = m; }
+      } catch (e) { this.postErr.push(m + ': ' + String(e.message || e).slice(0, 200)); }
     }
     if (!out) throw new Error('The AI is busy. Try again in a minute.');
-    const clean = (t) => String(t || '').replace(BAD_WORDS, '').replace(/https?:\/\/\S+/g, '').replace(/#\S+/g, '').replace(/\s+/g, ' ').trim();
+    const SWEAR = /\b(f+u+c+k\w*|f\*+\w*|sh+i+t+\w*|piss\w*|p\*ss\w*|bitch\w*|ass(hole)?|damn)\b/gi;
+    const clean = (t) => String(t || '').replace(BAD_WORDS, '').replace(/https?:\/\/\S+/g, '').replace(/#\S+/g, '').replace(SWEAR, (w) => w[0] + '*'.repeat(Math.max(1, w.length - 2)) + w.slice(-1)).replace(/\s+/g, ' ').trim();
     const tag = (t) => '#' + String(t).replace(/[^\p{L}\p{N}_]/gu, '');
     const nameTag = camp && camp.tags.length ? null : tag(name.replace(/\s+/g, ''));
-    const extra = (out.hashtags || []).map(tag).filter((t) => t.length > 2 && !/^#(fyp|foryou|foryoupage|viral|trending|explore|shorts)$/i.test(t) && !BAD_WORDS.test(t));
+    const extra = (out.hashtags || []).map(tag).filter((t) => t.length > 2 && !/^#(fyp|foryou|foryoupage|viral|trending|explore|shorts|gaming|gamer|streamer|streamers|streaming|twitch|drama|twitchdrama|beef|exposed)$/i.test(t) && !BAD_WORDS.test(t));
     const uniq = (a) => { const seen = new Set(); return a.filter((t) => t && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase())); };
     const req = camp ? camp.tags : [];
     const credit = camp && camp.credit ? camp.credit : `Clip from ${name}'s stream${login ? `: twitch.tv/${login}` : ''}. All credit to ${name}.`;
     const yt = uniq(['#shorts', ...req, nameTag, ...extra]).slice(0, Math.max(5, req.length + 1));
     const social = uniq([...req, nameTag, ...extra, '#twitchclips']).slice(0, Math.max(4, req.length));
     const res = {
-      streamer: name, campaign: camp ? { name: camp.name, rules: camp.rules } : null,
+      streamer: name, model: out.model, campaign: camp ? { name: camp.name, rules: camp.rules } : null,
       youtube: { titles: [...new Set(out.titles.map(clean).filter((t) => t.length > 5).map((t) => t.slice(0, 100)))].slice(0, 3), description: `${clean(out.ytLine)}\n${credit}\n${yt.join(' ')}`, tags: uniq((out.tags || []).map((t) => String(t).toLowerCase().replace(/[^\p{L}\p{N} ]/gu, '').trim()).filter(Boolean)).slice(0, 10).join(', ') },
       tiktok: `${clean(out.tiktok)} ${social.join(' ')}`.trim(),
       instagram: `${clean(out.instagram)}\n\n🎥 ${credit}\n${social.join(' ')}`,
